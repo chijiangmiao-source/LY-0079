@@ -75,6 +75,38 @@ export const afterSalesResultMap: Record<string, { label: string; color: string 
   no_issues: { label: '无问题', color: 'bg-gray-100 text-gray-800' },
 };
 
+export const complaintStatusMap: Record<string, { label: string; color: string }> = {
+  pending: { label: '待处理', color: 'bg-yellow-100 text-yellow-800' },
+  assigned: { label: '已分配', color: 'bg-blue-100 text-blue-800' },
+  processing: { label: '处理中', color: 'bg-indigo-100 text-indigo-800' },
+  compensated: { label: '已补偿', color: 'bg-purple-100 text-purple-800' },
+  resolved: { label: '已解决', color: 'bg-green-100 text-green-800' },
+  closed: { label: '已关闭', color: 'bg-gray-100 text-gray-800' },
+  cancelled: { label: '已取消', color: 'bg-red-100 text-red-800' },
+};
+
+export const complaintTypeMap: Record<string, { label: string; color: string }> = {
+  quality: { label: '照片质量', color: 'bg-red-100 text-red-800' },
+  service: { label: '服务问题', color: 'bg-orange-100 text-orange-800' },
+  delivery: { label: '交付延迟', color: 'bg-yellow-100 text-yellow-800' },
+  attitude: { label: '态度问题', color: 'bg-pink-100 text-pink-800' },
+  other: { label: '其他问题', color: 'bg-gray-100 text-gray-800' },
+};
+
+export const complaintSourceMap: Record<string, { label: string; color: string }> = {
+  auto_low_rating: { label: '低分自动生成', color: 'bg-red-100 text-red-800' },
+  customer_initiated: { label: '客户主动投诉', color: 'bg-orange-100 text-orange-800' },
+  manual: { label: '手动创建', color: 'bg-gray-100 text-gray-800' },
+};
+
+export const compensationTypeMap: Record<string, { label: string; color: string }> = {
+  refund: { label: '退款', color: 'bg-green-100 text-green-800' },
+  discount: { label: '折扣', color: 'bg-blue-100 text-blue-800' },
+  retake: { label: '重拍', color: 'bg-purple-100 text-purple-800' },
+  gift: { label: '赠品', color: 'bg-pink-100 text-pink-800' },
+  other: { label: '其他', color: 'bg-gray-100 text-gray-800' },
+};
+
 export function getStatusBadge(statusMap: Record<string, { label: string; color: string }>, status: string) {
   const info = statusMap[status] || { label: status, color: 'bg-gray-100 text-gray-800' };
   return info;

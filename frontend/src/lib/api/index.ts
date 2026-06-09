@@ -29,6 +29,16 @@ import type {
   FollowUpRecordDetail,
   FollowUpListItem,
   ReviewDashboardStats,
+  ComplaintType,
+  ComplaintStatus,
+  ComplaintSource,
+  CompensationType,
+  ComplaintTicket,
+  ComplaintTicketListItem,
+  ComplaintTicketDetail,
+  CompensationRecord,
+  CompensationDetail,
+  ComplaintDashboardStats,
 } from '$lib/types';
 export { authApi, usersApi } from './auth';
 
@@ -179,4 +189,68 @@ export const reviewsApi = {
     is_anonymous?: boolean;
   }) => api.put<CustomerReview>(`/reviews/customer/${id}`, data).then((r) => r.data),
   getDashboardStats: () => api.get<ReviewDashboardStats>('/reviews/dashboard-stats').then((r) => r.data),
+};
+
+export const complaintsApi = {
+  list: (params?: {
+    complaint_type?: ComplaintType;
+    status?: ComplaintStatus;
+    photographer_id?: number;
+    has_compensation?: boolean;
+    order_id?: number;
+    skip?: number;
+    limit?: number;
+  }) => api.get<ComplaintTicketListItem[]>('/complaints/', { params }).then((r) => r.data),
+  get: (id: number) => api.get<ComplaintTicketDetail>(`/complaints/${id}`).then((r) => r.data),
+  create: (data: {
+    order_id: number;
+    complaint_type: ComplaintType;
+    title: string;
+    description: string;
+    source?: ComplaintSource;
+  }) => api.post<ComplaintTicket>('/complaints/', data).then((r) => r.data),
+  createManual: (data: {
+    order_id: number;
+    customer_id: number;
+    complaint_type: ComplaintType;
+    title: string;
+    description: string;
+  }) => api.post<ComplaintTicket>('/complaints/manual', data).then((r) => r.data),
+  update: (id: number, data: {
+    complaint_type?: ComplaintType;
+    title?: string;
+    description?: string;
+    status?: ComplaintStatus;
+    assigned_to?: number;
+    process_deadline?: string;
+    progress_notes?: string;
+    final_conclusion?: string;
+  }) => api.put<ComplaintTicket>(`/complaints/${id}`, data).then((r) => r.data),
+  assign: (id: number, data: {
+    assigned_to: number;
+    process_deadline?: string;
+  }) => api.post<ComplaintTicket>(`/complaints/${id}/assign`, data).then((r) => r.data),
+  process: (id: number, data: {
+    progress_notes: string;
+    status?: ComplaintStatus;
+  }) => api.post<ComplaintTicket>(`/complaints/${id}/process`, data).then((r) => r.data),
+  resolve: (id: number, data: {
+    final_conclusion: string;
+    status?: ComplaintStatus;
+  }) => api.post<ComplaintTicket>(`/complaints/${id}/resolve`, data).then((r) => r.data),
+  delete: (id: number) => api.delete(`/complaints/${id}`).then((r) => r.data),
+  createCompensation: (id: number, data: {
+    compensation_type: CompensationType;
+    amount?: number;
+    description?: string;
+  }) => api.post<CompensationRecord>(`/complaints/${id}/compensation`, data).then((r) => r.data),
+  updateCompensation: (id: number, data: {
+    compensation_type?: CompensationType;
+    amount?: number;
+    description?: string;
+    is_executed?: boolean;
+  }) => api.put<CompensationRecord>(`/complaints/${id}/compensation`, data).then((r) => r.data),
+  approveCompensation: (id: number) => api.post<CompensationRecord>(`/complaints/${id}/compensation/approve`).then((r) => r.data),
+  executeCompensation: (id: number) => api.post<CompensationRecord>(`/complaints/${id}/compensation/execute`).then((r) => r.data),
+  getDashboardStats: () => api.get<ComplaintDashboardStats>('/complaints/dashboard-stats').then((r) => r.data),
 };

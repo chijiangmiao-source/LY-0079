@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { dashboardApi, reviewsApi } from '$lib/api';
-  import type { DashboardResponse, ReviewDashboardStats } from '$lib/types';
-  import { formatDate, formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap, followUpStatusMap } from '$lib/utils';
+  import { dashboardApi, reviewsApi, complaintsApi } from '$lib/api';
+  import type { DashboardResponse, ReviewDashboardStats, ComplaintDashboardStats } from '$lib/types';
+  import { formatDate, formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap, followUpStatusMap, complaintStatusMap, complaintTypeMap } from '$lib/utils';
   import {
     FileText,
     Image,
@@ -21,10 +21,15 @@
     Clock3,
     CheckCircle2,
     BarChart3,
+    AlertOctagon,
+    DollarSign,
+    Users,
+    XCircle,
   } from 'lucide-svelte';
 
   let data: DashboardResponse | null = null;
   let reviewStats: ReviewDashboardStats | null = null;
+  let complaintStats: ComplaintDashboardStats | null = null;
   let loading = true;
 
   function formatShootTime(start?: string, end?: string): string {
@@ -37,12 +42,14 @@
 
   onMount(async () => {
     try {
-      const [stats, rStats] = await Promise.all([
+      const [stats, rStats, cStats] = await Promise.all([
         dashboardApi.stats(),
         reviewsApi.getDashboardStats().catch(() => null),
+        complaintsApi.getDashboardStats().catch(() => null),
       ]);
       data = stats;
       reviewStats = rStats;
+      complaintStats = cStats;
     } finally {
       loading = false;
     }
@@ -381,6 +388,195 @@
             <div class="text-center text-sm text-gray-500">
               7天内待回访: <span class="font-semibold text-gray-900">{reviewStats.pending_follow_up.pending_7d}</span> 单
             </div>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if complaintStats}
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-red-100 rounded-lg">
+              <AlertOctagon class="w-6 h-6 text-red-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">近30天投诉数</p>
+              <p class="text-2xl font-bold text-gray-900">{complaintStats.total_complaints_30d}</p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-yellow-100 rounded-lg">
+              <Clock3 class="w-6 h-6 text-yellow-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">待处理</p>
+              <p class="text-2xl font-bold text-gray-900">{complaintStats.pending_count}</p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-blue-100 rounded-lg">
+              <MessageSquare class="w-6 h-6 text-blue-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">处理中</p>
+              <p class="text-2xl font-bold text-gray-900">{complaintStats.processing_count}</p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-green-100 rounded-lg">
+              <CheckCircle2 class="w-6 h-6 text-green-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">超时未处理</p>
+              <p class="text-2xl font-bold text-gray-900">
+                <span class={complaintStats.overdue_count > 0 ? 'text-red-600' : ''}>{complaintStats.overdue_count}</span>
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-emerald-100 rounded-lg">
+              <DollarSign class="w-6 h-6 text-emerald-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">补偿成本（30天）</p>
+              <p class="text-2xl font-bold text-gray-900">¥{complaintStats.total_compensation_amount.toFixed(2)}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="card lg:col-span-2">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between flex-wrap gap-3">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <TrendingUp class="w-5 h-5 mr-2 text-red-500" />
+              近30天投诉趋势
+            </h2>
+            <div class="flex items-center gap-4 text-sm text-gray-500">
+              <span>总投诉: <span class="font-semibold text-gray-900">{complaintStats.total_complaints_30d}</span></span>
+              <span>已解决: <span class="font-semibold text-green-600">{complaintStats.resolved_count_30d}</span></span>
+              <span>平均耗时: <span class="font-semibold text-gray-900">{complaintStats.avg_resolve_hours.toFixed(1)}h</span></span>
+            </div>
+          </div>
+          <div class="p-6">
+            {#if complaintStats.complaint_trend.length === 0 || complaintStats.total_complaints_30d === 0}
+              <p class="text-gray-500 text-center py-8">暂无投诉数据</p>
+            {:else}
+              <div class="space-y-3">
+                {#each complaintStats.complaint_trend.slice(-14) as item}
+                  <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-500 w-20 shrink-0">{formatDate(item.date, 'MM-DD')}</span>
+                    <div class="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden relative">
+                      <div
+                        class="h-full bg-gradient-to-r from-red-400 to-red-500 rounded-full transition-all"
+                        style="width: {item.complaint_count > 0 ? Math.min((item.complaint_count / Math.max(...complaintStats.complaint_trend.map(t => t.complaint_count), 1)) * 100, 100) : 0}%;"
+                      ></div>
+                    </div>
+                    <div class="w-36 text-right shrink-0 flex items-center justify-end gap-2">
+                      <span class="text-sm font-semibold text-red-600">{item.complaint_count} 投诉</span>
+                      {#if item.resolved_count > 0}
+                        <span class="text-xs text-green-600">({item.resolved_count}已解)</span>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <XCircle class="w-5 h-5 mr-2 text-red-500" />
+              超时未处理预警
+            </h2>
+            <a href="/complaints" class="text-sm text-primary-600 hover:text-primary-700">查看全部</a>
+          </div>
+          <div class="overflow-x-auto">
+            {#if complaintStats.overdue_complaints.length === 0}
+              <p class="text-gray-500 text-center py-8">暂无超时工单</p>
+            {:else}
+              <table class="w-full">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">工单</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">客户</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">超时</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                  {#each complaintStats.overdue_complaints as oc}
+                    <tr class="hover:bg-gray-50">
+                      <td class="px-4 py-3">
+                        <a href="/complaints/{oc.id}" class="text-sm font-medium text-primary-600 hover:text-primary-900">
+                          {oc.ticket_no}
+                        </a>
+                        <p class="text-xs text-gray-500 mt-0.5">{oc.order_no}</p>
+                      </td>
+                      <td class="px-4 py-3 text-sm text-gray-600">{oc.customer_name || '-'}</td>
+                      <td class="px-4 py-3">
+                        <span class="badge {getStatusBadge(complaintStatusMap, oc.status).color}">
+                          {getStatusBadge(complaintStatusMap, oc.status).label}
+                        </span>
+                      </td>
+                      <td class="px-4 py-3">
+                        <span class="text-red-600 font-medium text-sm">{oc.overdue_days} 天</span>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {/if}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <DollarSign class="w-5 h-5 mr-2 text-emerald-500" />
+              补偿成本统计
+            </h2>
+            <a href="/complaints" class="text-sm text-primary-600 hover:text-primary-700">查看全部</a>
+          </div>
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div class="text-center p-3 bg-red-50 rounded-lg">
+                <AlertOctagon class="w-6 h-6 text-red-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">{complaintStats.compensation_count}</p>
+                <p class="text-xs text-gray-500">补偿工单</p>
+              </div>
+              <div class="text-center p-3 bg-emerald-50 rounded-lg">
+                <DollarSign class="w-6 h-6 text-emerald-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">¥{complaintStats.total_compensation_amount.toFixed(0)}</p>
+                <p class="text-xs text-gray-500">总补偿金额</p>
+              </div>
+            </div>
+            {#if Object.keys(complaintStats.type_distribution).length > 0}
+              <div class="pt-4 border-t border-gray-100">
+                <p class="text-sm font-medium text-gray-700 mb-3">投诉类型分布</p>
+                <div class="space-y-2">
+                  {#each Object.entries(complaintStats.type_distribution) as [type, count]}
+                    {#if count > 0}
+                      <div class="flex items-center justify-between">
+                        <span class="text-sm text-gray-600">{getStatusBadge(complaintTypeMap, type).label}</span>
+                        <span class="text-sm font-medium text-gray-900">{count} 件</span>
+                      </div>
+                    {/if}
+                  {/each}
+                </div>
+              </div>
+            {/if}
           </div>
         </div>
       </div>

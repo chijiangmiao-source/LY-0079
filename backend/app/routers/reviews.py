@@ -13,6 +13,7 @@ from app.models import (
     User, UserRole, Order, OrderStatus, CustomerReview, FollowUpRecord,
     FollowUpStatus, AfterSalesResult,
 )
+from app.routers.complaints import auto_create_complaint_from_review
 from app.schemas.reviews import (
     CustomerReviewCreate,
     CustomerReviewUpdate,
@@ -323,6 +324,9 @@ class ReviewsController(Controller):
         db.add(review)
         db.commit()
         db.refresh(review)
+
+        auto_create_complaint_from_review(db, review)
+
         return CustomerReviewResponse.model_validate(review)
 
     @put("/customer/{review_id:int}")

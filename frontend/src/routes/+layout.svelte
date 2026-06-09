@@ -14,6 +14,7 @@
     Camera,
     MessageSquare,
     Star,
+    AlertOctagon,
   } from 'lucide-svelte';
 
   let user = getUser();
@@ -26,6 +27,7 @@
     { path: '/delivery', label: '交付版本', icon: Package, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
     { path: '/reviews/follow-ups', label: '回访管理', icon: MessageSquare, roles: ['admin', 'photographer'] },
     { path: '/reviews/customer', label: '客户评价', icon: Star, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
+    { path: '/complaints', label: '投诉工单', icon: AlertOctagon, roles: ['admin', 'photographer', 'customer'] },
     { path: '/users', label: '用户管理', icon: Users, roles: ['admin'] },
   ];
 

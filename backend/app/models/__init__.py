@@ -15,6 +15,12 @@ from app.models.models import (
     AfterSalesResult,
     CustomerReview,
     FollowUpRecord,
+    ComplaintType,
+    ComplaintStatus,
+    ComplaintSource,
+    CompensationType,
+    ComplaintTicket,
+    CompensationRecord,
 )
 
 __all__ = [
@@ -34,4 +40,10 @@ __all__ = [
     "AfterSalesResult",
     "CustomerReview",
     "FollowUpRecord",
+    "ComplaintType",
+    "ComplaintStatus",
+    "ComplaintSource",
+    "CompensationType",
+    "ComplaintTicket",
+    "CompensationRecord",
 ]

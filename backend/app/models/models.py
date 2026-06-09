@@ -238,3 +238,86 @@ class FollowUpRecord(Base):
 
     order = relationship("Order", back_populates="follow_up_records")
     follow_up_user = relationship("User", foreign_keys=[follow_up_by])
+
+
+class ComplaintType(str, enum.Enum):
+    QUALITY = "quality"
+    SERVICE = "service"
+    DELIVERY = "delivery"
+    ATTITUDE = "attitude"
+    OTHER = "other"
+
+
+class ComplaintStatus(str, enum.Enum):
+    PENDING = "pending"
+    ASSIGNED = "assigned"
+    PROCESSING = "processing"
+    COMPENSATED = "compensated"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+    CANCELLED = "cancelled"
+
+
+class ComplaintSource(str, enum.Enum):
+    AUTO_LOW_RATING = "auto_low_rating"
+    CUSTOMER_INITIATED = "customer_initiated"
+    MANUAL = "manual"
+
+
+class CompensationType(str, enum.Enum):
+    REFUND = "refund"
+    DISCOUNT = "discount"
+    RETAKE = "retake"
+    GIFT = "gift"
+    OTHER = "other"
+
+
+class ComplaintTicket(Base):
+    __tablename__ = "complaint_tickets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_no = Column(String(50), unique=True, index=True, nullable=False)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    complaint_type = Column(Enum(ComplaintType), nullable=False)
+    source = Column(Enum(ComplaintSource), default=ComplaintSource.MANUAL, nullable=False)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    status = Column(Enum(ComplaintStatus), default=ComplaintStatus.PENDING, nullable=False)
+    rating_trigger = Column(Integer)
+    assigned_to = Column(Integer, ForeignKey("users.id"))
+    assigned_at = Column(DateTime)
+    process_deadline = Column(DateTime)
+    progress_notes = Column(Text)
+    final_conclusion = Column(Text)
+    resolved_at = Column(DateTime)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = relationship("Order", foreign_keys=[order_id])
+    customer = relationship("User", foreign_keys=[customer_id])
+    assignee = relationship("User", foreign_keys=[assigned_to])
+    creator = relationship("User", foreign_keys=[created_by])
+    compensation = relationship("CompensationRecord", back_populates="complaint", uselist=False, cascade="all, delete-orphan")
+
+
+class CompensationRecord(Base):
+    __tablename__ = "compensation_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    complaint_id = Column(Integer, ForeignKey("complaint_tickets.id"), nullable=False, unique=True)
+    compensation_type = Column(Enum(CompensationType), nullable=False)
+    amount = Column(Float, default=0.0)
+    description = Column(Text)
+    approved_by = Column(Integer, ForeignKey("users.id"))
+    approved_at = Column(DateTime)
+    is_executed = Column(Boolean, default=False)
+    executed_at = Column(DateTime)
+    executed_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    complaint = relationship("ComplaintTicket", back_populates="compensation")
+    approver = relationship("User", foreign_keys=[approved_by])
+    executor = relationship("User", foreign_keys=[executed_by])

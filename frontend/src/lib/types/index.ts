@@ -356,3 +356,127 @@ export interface ReviewDashboardStats {
   low_score_orders: LowScoreOrder[];
   pending_follow_up: PendingFollowUpStat;
 }
+
+export type ComplaintType = 'quality' | 'service' | 'delivery' | 'attitude' | 'other';
+
+export type ComplaintStatus =
+  | 'pending'
+  | 'assigned'
+  | 'processing'
+  | 'compensated'
+  | 'resolved'
+  | 'closed'
+  | 'cancelled';
+
+export type ComplaintSource = 'auto_low_rating' | 'customer_initiated' | 'manual';
+
+export type CompensationType = 'refund' | 'discount' | 'retake' | 'gift' | 'other';
+
+export interface CompensationRecord {
+  id: number;
+  complaint_id: number;
+  compensation_type: CompensationType;
+  amount: number;
+  description?: string;
+  approved_by?: number;
+  approved_at?: string;
+  is_executed: boolean;
+  executed_at?: string;
+  executed_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompensationDetail extends CompensationRecord {
+  approver_name?: string;
+  executor_name?: string;
+}
+
+export interface ComplaintTicket {
+  id: number;
+  ticket_no: string;
+  order_id: number;
+  customer_id: number;
+  complaint_type: ComplaintType;
+  source: ComplaintSource;
+  title: string;
+  description: string;
+  status: ComplaintStatus;
+  rating_trigger?: number;
+  assigned_to?: number;
+  assigned_at?: string;
+  process_deadline?: string;
+  progress_notes?: string;
+  final_conclusion?: string;
+  resolved_at?: string;
+  created_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComplaintTicketListItem {
+  id: number;
+  ticket_no: string;
+  order_id: number;
+  order_no?: string;
+  customer_id: number;
+  customer_name?: string;
+  photographer_id?: number;
+  photographer_name?: string;
+  complaint_type: ComplaintType;
+  source: ComplaintSource;
+  title: string;
+  status: ComplaintStatus;
+  rating_trigger?: number;
+  assigned_to?: number;
+  assignee_name?: string;
+  process_deadline?: string;
+  has_compensation: boolean;
+  is_overdue: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComplaintTicketDetail extends ComplaintTicket {
+  order_no?: string;
+  customer_name?: string;
+  photographer_id?: number;
+  photographer_name?: string;
+  shoot_date?: string;
+  assignee_name?: string;
+  creator_name?: string;
+  compensation?: CompensationDetail;
+  is_overdue: boolean;
+}
+
+export interface ComplaintTrendItem {
+  date: string;
+  complaint_count: number;
+  resolved_count: number;
+}
+
+export interface OverdueComplaintItem {
+  id: number;
+  ticket_no: string;
+  order_no?: string;
+  customer_name?: string;
+  status: ComplaintStatus;
+  overdue_days: number;
+  process_deadline?: string;
+  assigned_to?: number;
+  assignee_name?: string;
+}
+
+export interface ComplaintDashboardStats {
+  total_complaints_30d: number;
+  pending_count: number;
+  processing_count: number;
+  resolved_count_30d: number;
+  overdue_count: number;
+  total_compensation_amount: number;
+  compensation_count: number;
+  avg_resolve_hours: number;
+  complaint_trend: ComplaintTrendItem[];
+  overdue_complaints: OverdueComplaintItem[];
+  type_distribution: Record<string, number>;
+}
