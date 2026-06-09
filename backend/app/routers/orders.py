@@ -162,7 +162,7 @@ class OrdersController(Controller):
         db.refresh(order)
         return OrderResponse.model_validate(order)
 
-    @delete("/{order_id:int}")
+    @delete("/{order_id:int}", status_code=200)
     async def delete_order(self, request: Request, db: Session, order_id: int) -> dict:
         user = get_current_user_from_request(request, db)
         if user.role != UserRole.ADMIN:

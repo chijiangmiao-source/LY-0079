@@ -250,7 +250,7 @@ class PhotoSheetsController(Controller):
         db.refresh(sheet)
         return PhotoSheetResponse.model_validate(sheet)
 
-    @delete("/{sheet_id:int}")
+    @delete("/{sheet_id:int}", status_code=200)
     async def delete_sheet(self, request: Request, db: Session, sheet_id: int) -> dict:
         user = get_current_user_from_request(request, db)
         if user.role != UserRole.ADMIN:

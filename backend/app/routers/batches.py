@@ -171,7 +171,7 @@ class BatchesController(Controller):
         db.refresh(batch)
         return PhotoBatchResponse.model_validate(batch)
 
-    @delete("/{batch_id:int}")
+    @delete("/{batch_id:int}", status_code=200)
     async def delete_batch(self, request: Request, db: Session, batch_id: int) -> dict:
         user = get_current_user_from_request(request, db)
         if user.role != UserRole.ADMIN:

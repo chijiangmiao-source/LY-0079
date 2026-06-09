@@ -150,7 +150,7 @@ class UsersController(Controller):
         db.refresh(user)
         return UserResponse.model_validate(user)
 
-    @delete("/{user_id:int}")
+    @delete("/{user_id:int}", status_code=200)
     async def delete_user(self, request: Request, db: Session, user_id: int) -> dict:
         self._check_admin(request, db)
         user = db.query(User).filter(User.id == user_id).first()

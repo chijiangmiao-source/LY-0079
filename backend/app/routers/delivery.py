@@ -157,7 +157,7 @@ class DeliveryController(Controller):
         db.refresh(version)
         return DeliveryVersionResponse.model_validate(version)
 
-    @delete("/{version_id:int}")
+    @delete("/{version_id:int}", status_code=200)
     async def delete_version(self, request: Request, db: Session, version_id: int) -> dict:
         user = get_current_user_from_request(request, db)
         if user.role != UserRole.ADMIN:
