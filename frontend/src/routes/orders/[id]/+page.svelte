@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { ordersApi, sheetsApi, selectionsApi } from '$lib/api';
-  import type { OrderDetail, PhotoSheetListItem, SelectionRecord } from '$lib/types';
+  import { ordersApi, sheetsApi } from '$lib/api';
+  import type { OrderDetail, PhotoSheetListItem } from '$lib/types';
   import {
     formatDate,
     formatDateTime,
@@ -11,12 +11,13 @@
     lockStatusMap,
     getStatusBadge,
   } from '$lib/utils';
-  import { ArrowLeft, Plus, Image } from 'lucide-svelte';
+  import { ArrowLeft, Plus, X } from 'lucide-svelte';
 
   let order: OrderDetail | null = null;
   let sheets: PhotoSheetListItem[] = [];
   let loading = true;
   let showCreateSheet = false;
+  let sheetFormErrors: Record<string, string> = {};
 
   let sheetForm = {
     total_photos: 0,
@@ -26,18 +27,34 @@
     notes: '',
   };
 
+  function validateSheetForm(): boolean {
+    sheetFormErrors = {};
+    if (sheetForm.total_photos < 0) {
+      sheetFormErrors.total_photos = '照片总数不能为负数';
+    }
+    if (sheetForm.selectable_count < 0) {
+      sheetFormErrors.selectable_count = '可选数量不能为负数';
+    }
+    if (sheetForm.selectable_count > sheetForm.total_photos) {
+      sheetFormErrors.selectable_count = '可选数量不能超过照片总数';
+    }
+    return Object.keys(sheetFormErrors).length === 0;
+  }
+
   async function loadData() {
     loading = true;
     try {
       const id = parseInt($page.params.id);
       order = await ordersApi.get(id);
-      sheets = await sheetsApi.list({ order_id: id });
+      const newSheets = await sheetsApi.list({ order_id: id });
+      sheets = newSheets;
     } finally {
       loading = false;
     }
   }
 
   async function handleCreateSheet() {
+    if (!validateSheetForm()) return;
     try {
       const data: any = {
         order_id: order?.id,
@@ -55,9 +72,17 @@
         retoucher_id: undefined,
         notes: '',
       };
-      loadData();
+      sheetFormErrors = {};
+      await loadData();
     } catch (err: any) {
-      alert(err?.response?.data?.detail || '创建片单失败');
+      const detail = err?.response?.data?.detail;
+      if (typeof detail === 'string') {
+        alert(detail);
+      } else if (Array.isArray(detail)) {
+        alert(detail.map((e: any) => e.msg || JSON.stringify(e)).join('\n'));
+      } else {
+        alert('创建片单失败');
+      }
     }
   }
 
@@ -74,14 +99,16 @@
     <div class="p-12 text-center text-gray-500">加载中...</div>
   {:else if order}
     <div class="mb-8">
-      <div class="flex items-start justify-between">
+      <div class="flex items-start justify-between flex-wrap gap-4">
         <div>
-          <h1 class="text-2xl font-bold text-gray-900">
-            {order.order_no}
-            <span class="ml-3 badge {getStatusBadge(orderStatusMap, order.status).color}">
-              {getStatusBadge(orderStatusMap, order.status).label}
-            </span>
-          </h1>
+          <div class="flex items-center gap-3">
+            <h1 class="text-2xl font-bold text-gray-900">
+              {order.order_no}
+              <span class="ml-3 badge {getStatusBadge(orderStatusMap, order.status).color}">
+                {getStatusBadge(orderStatusMap, order.status).label}
+              </span>
+            </h1>
+          </div>
           <p class="text-gray-500 mt-1">创建于 {formatDateTime(order.created_at)}</p>
         </div>
         <button class="btn btn-primary" on:click={() => (showCreateSheet = true)}>
@@ -105,7 +132,7 @@
         </div>
         <div class="card p-4">
           <p class="text-sm text-gray-500">片单 / 照片</p>
-          <p class="text-lg font-semibold mt-1">{order.sheet_count} / {order.photo_count}</p>
+          <p class="text-lg font-semibold mt-1">{sheets.length} / {sheets.reduce((sum, s) => sum + s.total_photos, 0)}</p>
         </div>
       </div>
 
@@ -137,7 +164,7 @@
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-200">
-            {#each sheets as sheet}
+            {#each sheets as sheet (sheet.id)}
               <tr class="hover:bg-gray-50">
                 <td class="px-6 py-4 text-sm font-medium text-gray-900">{sheet.sheet_no}</td>
                 <td class="px-6 py-4 text-sm text-gray-600">{sheet.total_photos}</td>
@@ -169,18 +196,54 @@
   {#if showCreateSheet && order}
     <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div class="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-auto">
-        <div class="p-6 border-b border-gray-200">
+        <div class="p-6 border-b border-gray-200 flex items-center justify-between">
           <h2 class="text-xl font-semibold text-gray-900">新建片单</h2>
+          <button class="text-gray-400 hover:text-gray-600" on:click={() => (showCreateSheet = false)}>
+            <X class="w-5 h-5" />
+          </button>
         </div>
         <form on:submit|preventDefault={handleCreateSheet} class="p-6 space-y-4">
           <div class="grid grid-cols-2 gap-4">
             <div>
               <label class="label">照片总数</label>
-              <input type="number" class="input" bind:value={sheetForm.total_photos} min="0" />
+              <input
+                type="number"
+                class="input {sheetFormErrors.total_photos ? 'border-red-500' : ''}"
+                bind:value={sheetForm.total_photos}
+                min="0"
+                on:input={() => {
+                  if (sheetForm.selectable_count > sheetForm.total_photos) {
+                    sheetFormErrors.selectable_count = '可选数量不能超过照片总数';
+                  } else {
+                    delete sheetFormErrors.selectable_count;
+                  }
+                }}
+              />
+              {#if sheetFormErrors.total_photos}
+                <p class="text-red-500 text-xs mt-1">{sheetFormErrors.total_photos}</p>
+              {/if}
             </div>
             <div>
               <label class="label">可选数量</label>
-              <input type="number" class="input" bind:value={sheetForm.selectable_count} min="0" />
+              <input
+                type="number"
+                class="input {sheetFormErrors.selectable_count ? 'border-red-500' : ''}"
+                bind:value={sheetForm.selectable_count}
+                min="0"
+                max={sheetForm.total_photos}
+                on:input={() => {
+                  if (sheetForm.selectable_count > sheetForm.total_photos) {
+                    sheetFormErrors.selectable_count = '可选数量不能超过照片总数';
+                  } else {
+                    delete sheetFormErrors.selectable_count;
+                  }
+                }}
+              />
+              {#if sheetFormErrors.selectable_count}
+                <p class="text-red-500 text-xs mt-1">{sheetFormErrors.selectable_count}</p>
+              {:else if sheetForm.total_photos > 0}
+                <p class="text-gray-500 text-xs mt-1">最多 {sheetForm.total_photos} 张</p>
+              {/if}
             </div>
           </div>
           <div>

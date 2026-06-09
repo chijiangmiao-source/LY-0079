@@ -1,4 +1,5 @@
 from typing import List, Optional
+import uuid
 from litestar import Router, get, put, delete, Request, post
 from litestar.controller import Controller
 from litestar.di import Provide
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_password_hash, decode_token
 from app.models import User, UserRole
-from app.schemas.auth import UserCreate, UserUpdate, UserResponse, UserListItem
+from app.schemas.auth import UserCreate, UserUpdate, UserResponse, UserListItem, QuickCustomerCreate
 
 
 def provide_db() -> Session:
@@ -161,6 +162,32 @@ class UsersController(Controller):
         user.is_active = False
         db.commit()
         return {"message": "用户已禁用"}
+
+    @post("/quick-customer")
+    async def create_quick_customer(self, request: Request, db: Session, data: QuickCustomerCreate) -> UserListItem:
+        user = get_current_user_from_request(request, db)
+        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
+            raise PermissionDeniedException("只有管理员和摄影师可以快速创建客户")
+
+        base_username = f"cust_{uuid.uuid4().hex[:8]}"
+        username = base_username
+        counter = 1
+        while db.query(User).filter(User.username == username).first():
+            username = f"{base_username}_{counter}"
+            counter += 1
+
+        customer = User(
+            username=username,
+            full_name=data.full_name,
+            phone=data.phone,
+            hashed_password=get_password_hash("123456"),
+            role=UserRole.CUSTOMER,
+            is_active=True,
+        )
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+        return UserListItem.model_validate(customer)
 
 
 users_router = Router(route_handlers=[UsersController], path="/api")

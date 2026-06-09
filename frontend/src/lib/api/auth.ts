@@ -26,6 +26,8 @@ export const usersApi = {
   listCustomers: () => api.get<UserListItem[]>('/users/customers').then((r) => r.data),
   get: (id: number) => api.get<User>(`/users/${id}`).then((r) => r.data),
   create: (data: any) => api.post<User>('/users/', data).then((r) => r.data),
+  quickCreateCustomer: (data: { full_name: string; phone?: string }) =>
+    api.post<UserListItem>('/users/quick-customer', data).then((r) => r.data),
   update: (id: number, data: any) => api.put<User>(`/users/${id}`, data).then((r) => r.data),
   delete: (id: number) => api.delete(`/users/${id}`).then((r) => r.data),
 };

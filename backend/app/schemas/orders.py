@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List
 from datetime import datetime, date
 
@@ -9,9 +9,15 @@ class OrderBase(BaseModel):
     shoot_type: Optional[str] = Field(None, max_length=100)
     shoot_date: Optional[date] = None
     location: Optional[str] = Field(None, max_length=255)
-    total_photos: int = 0
-    included_retouches: int = 0
+    total_photos: int = Field(0, ge=0)
+    included_retouches: int = Field(0, ge=0)
     notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_retouches(self):
+        if self.included_retouches > self.total_photos:
+            raise ValueError("精修数量不能超过照片总数")
+        return self
 
 
 class OrderCreate(OrderBase):
@@ -25,10 +31,17 @@ class OrderUpdate(BaseModel):
     shoot_type: Optional[str] = Field(None, max_length=100)
     shoot_date: Optional[date] = None
     location: Optional[str] = Field(None, max_length=255)
-    total_photos: Optional[int] = None
-    included_retouches: Optional[int] = None
+    total_photos: Optional[int] = Field(None, ge=0)
+    included_retouches: Optional[int] = Field(None, ge=0)
     status: Optional[OrderStatus] = None
     notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_retouches(self):
+        if self.total_photos is not None and self.included_retouches is not None:
+            if self.included_retouches > self.total_photos:
+                raise ValueError("精修数量不能超过照片总数")
+        return self
 
 
 class OrderResponse(OrderBase):
