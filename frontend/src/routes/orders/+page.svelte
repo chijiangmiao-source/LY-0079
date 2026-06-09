@@ -69,6 +69,26 @@
         formErrors.shoot_time_end = '结束时间必须晚于开始时间';
       }
     }
+    if (form.shoot_date && form.shoot_time_start) {
+      const d = new Date(form.shoot_time_start);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const startDate = `${yyyy}-${mm}-${dd}`;
+      if (form.shoot_date !== startDate) {
+        formErrors.shoot_date = '拍摄日期必须与开始时间的日期一致';
+      }
+    }
+    if (form.shoot_date && form.shoot_time_end) {
+      const d = new Date(form.shoot_time_end);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const endDate = `${yyyy}-${mm}-${dd}`;
+      if (form.shoot_date !== endDate) {
+        formErrors.shoot_date = '拍摄日期必须与结束时间的日期一致';
+      }
+    }
     if (scheduleConflict?.has_conflict) {
       formErrors.schedule = '摄影师档期存在冲突，请调整时间或更换摄影师';
     }
@@ -127,11 +147,9 @@
       if (photographerFilter) params.photographer_id = photographerFilter;
       if (cityFilter) params.city = cityFilter;
       orders = await ordersApi.list(params);
+      photographers = await usersApi.listPhotographers();
       if (canCreate) {
-        [customers, photographers] = await Promise.all([
-          usersApi.listCustomers(),
-          usersApi.list('photographer'),
-        ]);
+        customers = await usersApi.listCustomers();
       }
     } finally {
       loading = false;
@@ -442,7 +460,10 @@
           <div class="grid grid-cols-3 gap-4">
             <div>
               <label class="label">拍摄日期</label>
-              <input type="date" class="input" bind:value={form.shoot_date} />
+              <input type="date" class="input {formErrors.shoot_date ? 'border-red-500' : ''}" bind:value={form.shoot_date} />
+              {#if formErrors.shoot_date}
+                <p class="text-red-500 text-xs mt-1">{formErrors.shoot_date}</p>
+              {/if}
             </div>
             <div>
               <label class="label">

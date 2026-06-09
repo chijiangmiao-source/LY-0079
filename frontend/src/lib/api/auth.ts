@@ -17,12 +17,19 @@ export const authApi = {
   me: () => api.get<User>('/auth/me').then((r) => r.data),
 };
 
+export interface UserListParams {
+  role?: UserRole;
+  skip?: number;
+  limit?: number;
+}
+
 export const usersApi = {
-  list: (role?: UserRole) =>
+  list: (params?: UserListParams) =>
     api
-      .get<UserListItem[]>('/users/', { params: role ? { role } : undefined })
+      .get<UserListItem[]>('/users/', { params: params && Object.keys(params).length ? params : undefined })
       .then((r) => r.data),
   listRetouchers: () => api.get<UserListItem[]>('/users/retouchers').then((r) => r.data),
+  listPhotographers: () => api.get<UserListItem[]>('/users/photographers').then((r) => r.data),
   listCustomers: () => api.get<UserListItem[]>('/users/customers').then((r) => r.data),
   get: (id: number) => api.get<User>(`/users/${id}`).then((r) => r.data),
   create: (data: any) => api.post<User>('/users/', data).then((r) => r.data),

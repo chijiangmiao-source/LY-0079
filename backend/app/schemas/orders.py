@@ -30,6 +30,16 @@ class OrderBase(BaseModel):
                 raise ValueError("拍摄结束时间必须晚于开始时间")
         return self
 
+    @model_validator(mode="after")
+    def check_shoot_date_match(self):
+        if self.shoot_date and self.shoot_time_start:
+            if self.shoot_date != self.shoot_time_start.date():
+                raise ValueError("拍摄日期必须与开始时间的日期一致")
+        if self.shoot_date and self.shoot_time_end:
+            if self.shoot_date != self.shoot_time_end.date():
+                raise ValueError("拍摄日期必须与结束时间的日期一致")
+        return self
+
 
 class OrderCreate(OrderBase):
     customer_id: int
@@ -63,6 +73,16 @@ class OrderUpdate(BaseModel):
         if self.shoot_time_start and self.shoot_time_end:
             if self.shoot_time_end <= self.shoot_time_start:
                 raise ValueError("拍摄结束时间必须晚于开始时间")
+        return self
+
+    @model_validator(mode="after")
+    def check_shoot_date_match(self):
+        if self.shoot_date and self.shoot_time_start:
+            if self.shoot_date != self.shoot_time_start.date():
+                raise ValueError("拍摄日期必须与开始时间的日期一致")
+        if self.shoot_date and self.shoot_time_end:
+            if self.shoot_date != self.shoot_time_end.date():
+                raise ValueError("拍摄日期必须与结束时间的日期一致")
         return self
 
 

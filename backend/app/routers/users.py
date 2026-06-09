@@ -79,6 +79,16 @@ class UsersController(Controller):
         retouchers = db.query(User).filter(User.role == UserRole.RETOUCHER, User.is_active == True).all()
         return [UserListItem.model_validate(u) for u in retouchers]
 
+    @get("/photographers")
+    async def list_photographers(
+        self,
+        request: Request,
+        db: Session,
+    ) -> List[UserListItem]:
+        get_current_user_from_request(request, db)
+        photographers = db.query(User).filter(User.role == UserRole.PHOTOGRAPHER, User.is_active == True).all()
+        return [UserListItem.model_validate(u) for u in photographers]
+
     @get("/customers")
     async def list_customers(
         self,
