@@ -7,7 +7,8 @@ from litestar.exceptions import HTTPException, NotAuthorizedException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import verify_password, create_access_token, get_password_hash, decode_token
+from app.core.security import verify_password, create_access_token, get_password_hash
+from app.core.auth import get_current_user
 from app.core.config import settings
 from app.models import User, UserRole
 from app.schemas.auth import (
@@ -61,27 +62,7 @@ class AuthController(Controller):
 
     @get("/me")
     async def get_me(self, request: Request, db: Session) -> UserResponse:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            raise NotAuthorizedException("未提供认证令牌")
-        try:
-            scheme, token = auth_header.split()
-            if scheme.lower() != "bearer":
-                raise NotAuthorizedException("认证方案无效")
-        except ValueError:
-            raise NotAuthorizedException("认证头格式无效")
-
-        payload = decode_token(token)
-        if not payload:
-            raise NotAuthorizedException("令牌无效或已过期")
-
-        user_id = payload.get("sub")
-        if not user_id:
-            raise NotAuthorizedException("令牌内容无效")
-
-        user = db.query(User).filter(User.id == int(user_id)).first()
-        if not user:
-            raise NotAuthorizedException("用户不存在")
+        user = get_current_user(request, db)
         return UserResponse.model_validate(user)
 
 

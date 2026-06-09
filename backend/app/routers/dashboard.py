@@ -3,16 +3,20 @@ from typing import List
 from litestar import Router, get, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import NotAuthorizedException
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
+from sqlalchemy import func
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+)
 from app.models import (
     User, UserRole, Order, OrderStatus, PhotoSheet, LockStatus, RetouchStatus,
     SelectionRecord, RetouchRequest, RetouchRequestStatus, DeliveryVersion,
 )
+from app.services.user_service import UserService
+from app.services.order_service import OrderService
 from app.schemas.dashboard import (
     RetoucherWorkload,
     OrderSelectionProgress,
@@ -28,40 +32,13 @@ def provide_db() -> Session:
     return next(get_db())
 
 
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
-
-
 class DashboardController(Controller):
     path = "/dashboard"
     dependencies = {"db": Provide(provide_db)}
 
     @get("/stats")
     async def get_stats(self, request: Request, db: Session) -> DashboardResponse:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
 
         now = datetime.utcnow()
         today_start = datetime.combine(date.today(), datetime.min.time())
@@ -74,10 +51,7 @@ class DashboardController(Controller):
         follow_up_sheets = db.query(PhotoSheet).filter(PhotoSheet.lock_status == LockStatus.FOLLOW_UP).count()
         total_deliveries = db.query(DeliveryVersion).count()
 
-        retouchers = db.query(User).filter(
-            User.role == UserRole.RETOUCHER,
-            User.is_active == True,
-        ).all()
+        retouchers = UserService.list_retouchers(db)
         retouchers_workload: List[RetoucherWorkload] = []
         for ret in retouchers:
             assigned = db.query(PhotoSheet).filter(PhotoSheet.retoucher_id == ret.id).count()
@@ -115,7 +89,7 @@ class DashboardController(Controller):
             unlocked = sum(1 for s in sheets if s.lock_status == LockStatus.UNLOCKED)
             follow_up = sum(1 for s in sheets if s.lock_status == LockStatus.FOLLOW_UP)
             progress = (locked / total * 100) if total > 0 else 0.0
-            customer = db.query(User).filter(User.id == ord.customer_id).first()
+            customer = UserService.get_by_id(db, ord.customer_id)
             selection_progress.append(
                 OrderSelectionProgress(
                     order_id=ord.id,
@@ -140,8 +114,8 @@ class DashboardController(Controller):
         )
         overdue_sheets: List[OverdueSheet] = []
         for s in overdue_sheets_query:
-            order = db.query(Order).filter(Order.id == s.order_id).first()
-            customer = db.query(User).filter(User.id == order.customer_id).first() if order else None
+            order = OrderService.get_by_id(db, s.order_id)
+            customer = UserService.get_by_id(db, order.customer_id) if order else None
             overdue_days = (now - s.selection_deadline).days if s.selection_deadline else 0
             overdue_sheets.append(
                 OverdueSheet(
@@ -170,8 +144,8 @@ class DashboardController(Controller):
 
         upcoming_shoots: List[UpcomingShootOrder] = []
         for o in upcoming_orders:
-            customer = db.query(User).filter(User.id == o.customer_id).first()
-            photographer = db.query(User).filter(User.id == o.photographer_id).first() if o.photographer_id else None
+            customer = UserService.get_by_id(db, o.customer_id)
+            photographer = UserService.get_by_id(db, o.photographer_id) if o.photographer_id else None
             upcoming_shoots.append(
                 UpcomingShootOrder(
                     order_id=o.id,
@@ -218,7 +192,7 @@ class DashboardController(Controller):
 
                 p_upcoming_list: List[UpcomingShootOrder] = []
                 for o in sorted(upcoming_p_orders, key=lambda x: (x.shoot_date, x.shoot_time_start or datetime.min)):
-                    customer = db.query(User).filter(User.id == o.customer_id).first()
+                    customer = UserService.get_by_id(db, o.customer_id)
                     p_upcoming_list.append(
                         UpcomingShootOrder(
                             order_id=o.id,
@@ -266,11 +240,8 @@ class DashboardController(Controller):
 
     @get("/retouchers-workload")
     async def get_retouchers_workload(self, request: Request, db: Session) -> List[RetoucherWorkload]:
-        get_current_user_from_request(request, db)
-        retouchers = db.query(User).filter(
-            User.role == UserRole.RETOUCHER,
-            User.is_active == True,
-        ).all()
+        get_current_user(request, db)
+        retouchers = UserService.list_retouchers(db)
         result: List[RetoucherWorkload] = []
         for ret in retouchers:
             assigned = db.query(PhotoSheet).filter(PhotoSheet.retoucher_id == ret.id).count()
@@ -302,7 +273,7 @@ class DashboardController(Controller):
 
     @get("/selection-progress")
     async def get_selection_progress(self, request: Request, db: Session) -> List[OrderSelectionProgress]:
-        get_current_user_from_request(request, db)
+        get_current_user(request, db)
         orders = db.query(Order).all()
         result: List[OrderSelectionProgress] = []
         for ord in orders:
@@ -312,7 +283,7 @@ class DashboardController(Controller):
             unlocked = sum(1 for s in sheets if s.lock_status == LockStatus.UNLOCKED)
             follow_up = sum(1 for s in sheets if s.lock_status == LockStatus.FOLLOW_UP)
             progress = (locked / total * 100) if total > 0 else 0.0
-            customer = db.query(User).filter(User.id == ord.customer_id).first()
+            customer = UserService.get_by_id(db, ord.customer_id)
             result.append(
                 OrderSelectionProgress(
                     order_id=ord.id,
@@ -329,7 +300,7 @@ class DashboardController(Controller):
 
     @get("/overdue-sheets")
     async def get_overdue_sheets(self, request: Request, db: Session) -> List[OverdueSheet]:
-        get_current_user_from_request(request, db)
+        get_current_user(request, db)
         now = datetime.utcnow()
         overdue_sheets = (
             db.query(PhotoSheet)
@@ -342,8 +313,8 @@ class DashboardController(Controller):
         )
         result: List[OverdueSheet] = []
         for s in overdue_sheets:
-            order = db.query(Order).filter(Order.id == s.order_id).first()
-            customer = db.query(User).filter(User.id == order.customer_id).first() if order else None
+            order = OrderService.get_by_id(db, s.order_id)
+            customer = UserService.get_by_id(db, order.customer_id) if order else None
             overdue_days = (now - s.selection_deadline).days if s.selection_deadline else 0
             result.append(
                 OverdueSheet(
@@ -361,7 +332,7 @@ class DashboardController(Controller):
 
     @get("/upcoming-shoots")
     async def get_upcoming_shoots(self, request: Request, db: Session) -> List[UpcomingShootOrder]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         today_start = datetime.combine(date.today(), datetime.min.time())
         seven_days_later = today_start + timedelta(days=7)
 
@@ -379,8 +350,8 @@ class DashboardController(Controller):
 
         result: List[UpcomingShootOrder] = []
         for o in orders:
-            customer = db.query(User).filter(User.id == o.customer_id).first()
-            photographer = db.query(User).filter(User.id == o.photographer_id).first() if o.photographer_id else None
+            customer = UserService.get_by_id(db, o.customer_id)
+            photographer = UserService.get_by_id(db, o.photographer_id) if o.photographer_id else None
             result.append(
                 UpcomingShootOrder(
                     order_id=o.id,
@@ -402,7 +373,7 @@ class DashboardController(Controller):
     async def get_photographer_schedule_stats(
         self, request: Request, db: Session
     ) -> List[PhotographerScheduleStat]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
             return []
 
@@ -438,7 +409,7 @@ class DashboardController(Controller):
 
             upcoming_list: List[UpcomingShootOrder] = []
             for o in sorted(upcoming_p_orders, key=lambda x: (x.shoot_date, x.shoot_time_start or datetime.min)):
-                customer = db.query(User).filter(User.id == o.customer_id).first()
+                customer = UserService.get_by_id(db, o.customer_id)
                 upcoming_list.append(
                     UpcomingShootOrder(
                         order_id=o.id,

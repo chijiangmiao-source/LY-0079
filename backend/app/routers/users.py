@@ -3,12 +3,19 @@ import uuid
 from litestar import Router, get, put, delete, Request, post
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import get_password_hash, decode_token
+from app.core.auth import (
+    get_current_user,
+    require_admin,
+    require_roles,
+    get_or_404,
+)
+from app.core.security import get_password_hash
 from app.models import User, UserRole
+from app.services.user_service import UserService
 from app.schemas.auth import UserCreate, UserUpdate, UserResponse, UserListItem, QuickCustomerCreate
 
 
@@ -16,42 +23,9 @@ def provide_db() -> Session:
     return next(get_db())
 
 
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
-
-
 class UsersController(Controller):
     path = "/users"
     dependencies = {"db": Provide(provide_db)}
-
-    def _check_admin(self, request: Request, db: Session) -> User:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("需要管理员权限")
-        return user
 
     @get("/")
     async def list_users(
@@ -62,7 +36,8 @@ class UsersController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[UserListItem]:
-        self._check_admin(request, db)
+        user = get_current_user(request, db)
+        require_admin(user)
         query = db.query(User)
         if role:
             query = query.filter(User.role == role)
@@ -75,8 +50,8 @@ class UsersController(Controller):
         request: Request,
         db: Session,
     ) -> List[UserListItem]:
-        get_current_user_from_request(request, db)
-        retouchers = db.query(User).filter(User.role == UserRole.RETOUCHER, User.is_active == True).all()
+        get_current_user(request, db)
+        retouchers = UserService.list_retouchers(db)
         return [UserListItem.model_validate(u) for u in retouchers]
 
     @get("/photographers")
@@ -85,8 +60,8 @@ class UsersController(Controller):
         request: Request,
         db: Session,
     ) -> List[UserListItem]:
-        get_current_user_from_request(request, db)
-        photographers = db.query(User).filter(User.role == UserRole.PHOTOGRAPHER, User.is_active == True).all()
+        get_current_user(request, db)
+        photographers = UserService.list_photographers(db)
         return [UserListItem.model_validate(u) for u in photographers]
 
     @get("/customers")
@@ -95,23 +70,22 @@ class UsersController(Controller):
         request: Request,
         db: Session,
     ) -> List[UserListItem]:
-        get_current_user_from_request(request, db)
-        customers = db.query(User).filter(User.role == UserRole.CUSTOMER, User.is_active == True).all()
+        get_current_user(request, db)
+        customers = UserService.list_customers(db)
         return [UserListItem.model_validate(u) for u in customers]
 
     @get("/{user_id:int}")
     async def get_user(self, request: Request, db: Session, user_id: int) -> UserResponse:
-        current_user = get_current_user_from_request(request, db)
+        current_user = get_current_user(request, db)
         if current_user.id != user_id and current_user.role != UserRole.ADMIN:
             raise PermissionDeniedException("权限不足")
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="用户不存在")
+        user = get_or_404(db, User, user_id, "用户")
         return UserResponse.model_validate(user)
 
     @post("/")
     async def create_user(self, request: Request, db: Session, data: UserCreate) -> UserResponse:
-        self._check_admin(request, db)
+        user = get_current_user(request, db)
+        require_admin(user)
         existing = db.query(User).filter(
             (User.username == data.username) | (User.email == data.email)
         ).first()
@@ -139,13 +113,11 @@ class UsersController(Controller):
         user_id: int,
         data: UserUpdate,
     ) -> UserResponse:
-        current_user = get_current_user_from_request(request, db)
+        current_user = get_current_user(request, db)
         if current_user.id != user_id and current_user.role != UserRole.ADMIN:
             raise PermissionDeniedException("权限不足")
 
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="用户不存在")
+        user = get_or_404(db, User, user_id, "用户")
 
         update_data = data.model_dump(exclude_unset=True)
         if "password" in update_data:
@@ -163,11 +135,10 @@ class UsersController(Controller):
 
     @delete("/{user_id:int}", status_code=200)
     async def delete_user(self, request: Request, db: Session, user_id: int) -> dict:
-        self._check_admin(request, db)
-        user = db.query(User).filter(User.id == user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="用户不存在")
-        if user.id == get_current_user_from_request(request, db).id:
+        current_user = get_current_user(request, db)
+        require_admin(current_user)
+        user = get_or_404(db, User, user_id, "用户")
+        if user.id == current_user.id:
             raise HTTPException(status_code=400, detail="不能删除自己")
         user.is_active = False
         db.commit()
@@ -175,9 +146,8 @@ class UsersController(Controller):
 
     @post("/quick-customer")
     async def create_quick_customer(self, request: Request, db: Session, data: QuickCustomerCreate) -> UserListItem:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("只有管理员和摄影师可以快速创建客户")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
         base_username = f"cust_{uuid.uuid4().hex[:8]}"
         username = base_username

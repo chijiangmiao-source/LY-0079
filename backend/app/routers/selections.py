@@ -3,15 +3,22 @@ from datetime import datetime
 from litestar import Router, get, post, put, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+    check_customer_sheet_access,
+    get_or_404,
+    get_customer_sheet_ids,
+)
 from app.models import (
     User, UserRole, Order, PhotoSheet, LockStatus,
     SelectionRecord,
 )
+from app.services.order_service import SheetService
 from app.schemas.selections import (
     SelectionCreate,
     SelectionUpdate,
@@ -23,33 +30,6 @@ from app.schemas.selections import (
 
 def provide_db() -> Session:
     return next(get_db())
-
-
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
 
 
 class SelectionsController(Controller):
@@ -69,14 +49,11 @@ class SelectionsController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[SelectionListItem]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(SelectionRecord)
 
         if user.role == UserRole.CUSTOMER:
-            customer_orders = db.query(Order).filter(Order.customer_id == user.id).all()
-            customer_order_ids = [o.id for o in customer_orders]
-            customer_sheets = db.query(PhotoSheet).filter(PhotoSheet.order_id.in_(customer_order_ids)).all()
-            customer_sheet_ids = [s.id for s in customer_sheets]
+            customer_sheet_ids = get_customer_sheet_ids(db, user.id)
             query = query.filter(SelectionRecord.sheet_id.in_(customer_sheet_ids))
 
         if sheet_id:
@@ -85,7 +62,7 @@ class SelectionsController(Controller):
         selections = query.order_by(SelectionRecord.created_at.desc()).offset(skip).limit(limit).all()
         result = []
         for sel in selections:
-            sheet = db.query(PhotoSheet).filter(PhotoSheet.id == sel.sheet_id).first()
+            sheet = SheetService.get_by_id(db, sel.sheet_id)
             item = SelectionListItem.model_validate(sel)
             item.sheet_no = sheet.sheet_no if sheet else None
             result.append(item)
@@ -93,31 +70,23 @@ class SelectionsController(Controller):
 
     @get("/{selection_id:int}")
     async def get_selection(self, request: Request, db: Session, selection_id: int) -> SelectionResponse:
-        user = get_current_user_from_request(request, db)
-        selection = db.query(SelectionRecord).filter(SelectionRecord.id == selection_id).first()
-        if not selection:
-            raise HTTPException(status_code=404, detail="选片记录不存在")
+        user = get_current_user(request, db)
+        selection = get_or_404(db, SelectionRecord, selection_id, "选片记录")
 
         if user.role == UserRole.CUSTOMER:
-            sheet = db.query(PhotoSheet).filter(PhotoSheet.id == selection.sheet_id).first()
-            order = db.query(Order).filter(Order.id == sheet.order_id).first() if sheet else None
-            if not order or order.customer_id != user.id:
-                raise PermissionDeniedException("权限不足")
+            sheet = SheetService.get_by_id(db, selection.sheet_id)
+            check_customer_sheet_access(sheet, user, db) if sheet else None
 
         return SelectionResponse.model_validate(selection)
 
     @post("/")
     async def create_selection(self, request: Request, db: Session, data: SelectionCreate) -> SelectionResponse:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
 
-        sheet = db.query(PhotoSheet).filter(PhotoSheet.id == data.sheet_id).first()
-        if not sheet:
-            raise HTTPException(status_code=404, detail="片单不存在")
+        sheet = get_or_404(db, PhotoSheet, data.sheet_id, "片单")
 
         if user.role == UserRole.CUSTOMER:
-            order = db.query(Order).filter(Order.id == sheet.order_id).first()
-            if not order or order.customer_id != user.id:
-                raise PermissionDeniedException("权限不足")
+            check_customer_sheet_access(sheet, user, db)
         elif user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
             raise PermissionDeniedException("权限不足")
 
@@ -146,23 +115,17 @@ class SelectionsController(Controller):
         selection_id: int,
         data: SelectionUpdate,
     ) -> SelectionResponse:
-        user = get_current_user_from_request(request, db)
-        selection = db.query(SelectionRecord).filter(SelectionRecord.id == selection_id).first()
-        if not selection:
-            raise HTTPException(status_code=404, detail="选片记录不存在")
+        user = get_current_user(request, db)
+        selection = get_or_404(db, SelectionRecord, selection_id, "选片记录")
 
         if selection.final_confirm_time:
             raise HTTPException(status_code=400, detail="选片已最终确认，无法修改")
 
-        sheet = db.query(PhotoSheet).filter(PhotoSheet.id == selection.sheet_id).first()
-        if not sheet:
-            raise HTTPException(status_code=404, detail="关联片单不存在")
+        sheet = get_or_404(db, PhotoSheet, selection.sheet_id, "关联片单")
         self._check_sheet_locked(sheet)
 
         if user.role == UserRole.CUSTOMER:
-            order = db.query(Order).filter(Order.id == sheet.order_id).first()
-            if not order or order.customer_id != user.id:
-                raise PermissionDeniedException("权限不足")
+            check_customer_sheet_access(sheet, user, db)
         elif user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
             raise PermissionDeniedException("权限不足")
 
@@ -189,20 +152,14 @@ class SelectionsController(Controller):
         selection_id: int,
         data: SelectionConfirmRequest,
     ) -> SelectionResponse:
-        user = get_current_user_from_request(request, db)
-        selection = db.query(SelectionRecord).filter(SelectionRecord.id == selection_id).first()
-        if not selection:
-            raise HTTPException(status_code=404, detail="选片记录不存在")
+        user = get_current_user(request, db)
+        selection = get_or_404(db, SelectionRecord, selection_id, "选片记录")
 
-        sheet = db.query(PhotoSheet).filter(PhotoSheet.id == selection.sheet_id).first()
-        if not sheet:
-            raise HTTPException(status_code=404, detail="关联片单不存在")
+        sheet = get_or_404(db, PhotoSheet, selection.sheet_id, "关联片单")
         self._check_sheet_locked(sheet)
 
         if user.role == UserRole.CUSTOMER:
-            order = db.query(Order).filter(Order.id == sheet.order_id).first()
-            if not order or order.customer_id != user.id:
-                raise PermissionDeniedException("权限不足")
+            check_customer_sheet_access(sheet, user, db)
         elif user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
             raise PermissionDeniedException("权限不足")
 

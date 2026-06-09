@@ -4,12 +4,22 @@ from datetime import datetime
 from litestar import Router, get, post, put, delete, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.core.security import decode_token
-from app.models import User, UserRole, Order, PhotoSheet, PhotoBatch, LockStatus
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+    require_admin,
+    check_customer_sheet_access,
+    get_or_404,
+    get_customer_order_ids,
+)
+from app.models import (
+    User, UserRole, Order, PhotoSheet, PhotoBatch, LockStatus,
+)
+from app.services.order_service import OrderService
 from app.schemas.batches import (
     PhotoBatchCreate,
     PhotoBatchUpdate,
@@ -20,33 +30,6 @@ from app.schemas.batches import (
 
 def provide_db() -> Session:
     return next(get_db())
-
-
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
 
 
 def generate_batch_no() -> str:
@@ -69,12 +52,11 @@ class BatchesController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[PhotoBatchListItem]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(PhotoBatch)
 
         if user.role == UserRole.CUSTOMER:
-            customer_orders = db.query(Order).filter(Order.customer_id == user.id).all()
-            customer_order_ids = [o.id for o in customer_orders]
+            customer_order_ids = get_customer_order_ids(db, user.id)
             query = query.filter(PhotoBatch.order_id.in_(customer_order_ids))
 
         if order_id:
@@ -89,13 +71,11 @@ class BatchesController(Controller):
 
     @get("/{batch_id:int}")
     async def get_batch(self, request: Request, db: Session, batch_id: int) -> PhotoBatchResponse:
-        user = get_current_user_from_request(request, db)
-        batch = db.query(PhotoBatch).filter(PhotoBatch.id == batch_id).first()
-        if not batch:
-            raise HTTPException(status_code=404, detail="批次不存在")
+        user = get_current_user(request, db)
+        batch = get_or_404(db, PhotoBatch, batch_id, "批次")
 
         if user.role == UserRole.CUSTOMER:
-            order = db.query(Order).filter(Order.id == batch.order_id).first()
+            order = OrderService.get_by_id(db, batch.order_id)
             if not order or order.customer_id != user.id:
                 raise PermissionDeniedException("权限不足")
 
@@ -103,18 +83,13 @@ class BatchesController(Controller):
 
     @post("/")
     async def create_batch(self, request: Request, db: Session, data: PhotoBatchCreate) -> PhotoBatchResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER, UserRole.RETOUCHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER, UserRole.RETOUCHER)
 
-        order = db.query(Order).filter(Order.id == data.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="关联订单不存在")
+        order = get_or_404(db, Order, data.order_id, "关联订单")
 
         if data.sheet_id:
-            sheet = db.query(PhotoSheet).filter(PhotoSheet.id == data.sheet_id).first()
-            if not sheet:
-                raise HTTPException(status_code=404, detail="关联片单不存在")
+            sheet = get_or_404(db, PhotoSheet, data.sheet_id, "关联片单")
             if sheet.lock_status == LockStatus.LOCKED:
                 raise HTTPException(status_code=400, detail="片单已锁定，无法添加批次")
 
@@ -145,13 +120,10 @@ class BatchesController(Controller):
         batch_id: int,
         data: PhotoBatchUpdate,
     ) -> PhotoBatchResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER, UserRole.RETOUCHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER, UserRole.RETOUCHER)
 
-        batch = db.query(PhotoBatch).filter(PhotoBatch.id == batch_id).first()
-        if not batch:
-            raise HTTPException(status_code=404, detail="批次不存在")
+        batch = get_or_404(db, PhotoBatch, batch_id, "批次")
 
         if batch.sheet_id:
             sheet = db.query(PhotoSheet).filter(PhotoSheet.id == batch.sheet_id).first()
@@ -173,13 +145,10 @@ class BatchesController(Controller):
 
     @delete("/{batch_id:int}", status_code=200)
     async def delete_batch(self, request: Request, db: Session, batch_id: int) -> dict:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("只有管理员可以删除批次")
+        user = get_current_user(request, db)
+        require_admin(user)
 
-        batch = db.query(PhotoBatch).filter(PhotoBatch.id == batch_id).first()
-        if not batch:
-            raise HTTPException(status_code=404, detail="批次不存在")
+        batch = get_or_404(db, PhotoBatch, batch_id, "批次")
 
         if batch.sheet_id:
             sheet = db.query(PhotoSheet).filter(PhotoSheet.id == batch.sheet_id).first()

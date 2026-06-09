@@ -1,19 +1,26 @@
 from typing import List, Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from litestar import Router, get, post, put, delete, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+    require_admin,
+    check_ticket_permission,
+    get_or_404,
+)
 from app.models import (
     User, UserRole, Order, OrderStatus, CustomerReview,
     ComplaintType, ComplaintStatus, ComplaintSource, CompensationType,
     ComplaintTicket, CompensationRecord,
 )
+from app.services.user_service import UserService
+from app.services.order_service import OrderService
 from app.schemas.complaints import (
     ComplaintTicketCreate,
     ComplaintTicketManualCreate,
@@ -38,33 +45,6 @@ def provide_db() -> Session:
     return next(get_db())
 
 
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
-
-
 LOW_RATING_THRESHOLD = 3
 COMPLAINT_PROCESS_DAYS = 3
 
@@ -85,7 +65,7 @@ def auto_create_complaint_from_review(db: Session, review: CustomerReview) -> Op
     if existing:
         return None
 
-    order = db.query(Order).filter(Order.id == review.order_id).first()
+    order = OrderService.get_by_id(db, review.order_id)
     if not order:
         return None
 
@@ -137,15 +117,6 @@ class ComplaintsController(Controller):
     path = "/complaints"
     dependencies = {"db": Provide(provide_db)}
 
-    def _check_ticket_permission(self, ticket: ComplaintTicket, user: User, db: Session) -> None:
-        if user.role in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            return
-        if user.role == UserRole.CUSTOMER and ticket.customer_id == user.id:
-            return
-        if ticket.assigned_to == user.id:
-            return
-        raise PermissionDeniedException("权限不足")
-
     @get("/")
     async def list_complaints(
         self,
@@ -159,15 +130,9 @@ class ComplaintsController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[ComplaintTicketListItem]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(ComplaintTicket).join(Order, ComplaintTicket.order_id == Order.id)
-
-        if user.role == UserRole.CUSTOMER:
-            query = query.filter(Order.customer_id == user.id)
-        elif user.role == UserRole.PHOTOGRAPHER:
-            query = query.filter(
-                (Order.photographer_id == user.id) | (Order.photographer_id.is_(None))
-            )
+        query = OrderService.apply_role_filter(query, user)
 
         if complaint_type:
             query = query.filter(ComplaintTicket.complaint_type == complaint_type)
@@ -182,10 +147,10 @@ class ComplaintsController(Controller):
         now = datetime.utcnow()
         result: List[ComplaintTicketListItem] = []
         for t in tickets:
-            order = db.query(Order).filter(Order.id == t.order_id).first()
-            customer = db.query(User).filter(User.id == t.customer_id).first()
-            photographer = db.query(User).filter(User.id == order.photographer_id).first() if order and order.photographer_id else None
-            assignee = db.query(User).filter(User.id == t.assigned_to).first() if t.assigned_to else None
+            order = OrderService.get_by_id(db, t.order_id)
+            customer = UserService.get_by_id(db, t.customer_id)
+            photographer = UserService.get_by_id(db, order.photographer_id) if order and order.photographer_id else None
+            assignee = UserService.get_by_id(db, t.assigned_to) if t.assigned_to else None
             compensation = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == t.id).first()
 
             is_overdue = False
@@ -228,20 +193,16 @@ class ComplaintsController(Controller):
     async def get_complaint(
         self, request: Request, db: Session, ticket_id: int
     ) -> ComplaintTicketDetail:
-        user = get_current_user_from_request(request, db)
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        user = get_current_user(request, db)
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
-        order = db.query(Order).filter(Order.id == ticket.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="关联订单不存在")
-        self._check_ticket_permission(ticket, user, db)
+        order = get_or_404(db, Order, ticket.order_id, "关联订单")
+        check_ticket_permission(ticket, user, db)
 
-        customer = db.query(User).filter(User.id == ticket.customer_id).first()
-        photographer = db.query(User).filter(User.id == order.photographer_id).first() if order.photographer_id else None
-        assignee = db.query(User).filter(User.id == ticket.assigned_to).first() if ticket.assigned_to else None
-        creator = db.query(User).filter(User.id == ticket.created_by).first() if ticket.created_by else None
+        customer = UserService.get_by_id(db, ticket.customer_id)
+        photographer = UserService.get_by_id(db, order.photographer_id) if order.photographer_id else None
+        assignee = UserService.get_by_id(db, ticket.assigned_to) if ticket.assigned_to else None
+        creator = UserService.get_by_id(db, ticket.created_by) if ticket.created_by else None
         compensation = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == ticket.id).first()
 
         now = datetime.utcnow()
@@ -251,8 +212,8 @@ class ComplaintsController(Controller):
 
         comp_detail = None
         if compensation:
-            approver = db.query(User).filter(User.id == compensation.approved_by).first() if compensation.approved_by else None
-            executor = db.query(User).filter(User.id == compensation.executed_by).first() if compensation.executed_by else None
+            approver = UserService.get_by_id(db, compensation.approved_by) if compensation.approved_by else None
+            executor = UserService.get_by_id(db, compensation.executed_by) if compensation.executed_by else None
             comp_detail = CompensationDetail(
                 **CompensationResponse.model_validate(compensation).model_dump(),
                 approver_name=approver.full_name if approver else None,
@@ -277,11 +238,9 @@ class ComplaintsController(Controller):
     async def create_complaint(
         self, request: Request, db: Session, data: ComplaintTicketCreate
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
 
-        order = db.query(Order).filter(Order.id == data.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
+        order = get_or_404(db, Order, data.order_id, "订单")
 
         if user.role == UserRole.CUSTOMER:
             if order.customer_id != user.id:
@@ -320,13 +279,10 @@ class ComplaintsController(Controller):
     async def create_complaint_manual(
         self, request: Request, db: Session, data: ComplaintTicketManualCreate
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("只有管理员和摄影师可以手动创建投诉工单")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        order = db.query(Order).filter(Order.id == data.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
+        order = get_or_404(db, Order, data.order_id, "订单")
 
         ticket = ComplaintTicket(
             ticket_no=generate_ticket_no(),
@@ -353,10 +309,8 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: ComplaintTicketUpdate,
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        user = get_current_user(request, db)
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
         if user.role == UserRole.CUSTOMER:
             if ticket.customer_id != user.id:
@@ -389,17 +343,12 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: ComplaintAssign,
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN]:
-            raise PermissionDeniedException("只有管理员可以分配投诉工单")
+        user = get_current_user(request, db)
+        require_admin(user)
 
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
-        assignee = db.query(User).filter(User.id == data.assigned_to).first()
-        if not assignee:
-            raise HTTPException(status_code=404, detail="处理人不存在")
+        assignee = get_or_404(db, User, data.assigned_to, "处理人")
 
         ticket.assigned_to = data.assigned_to
         ticket.assigned_at = datetime.utcnow()
@@ -423,13 +372,10 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: ComplaintProcess,
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
         if ticket.assigned_to and ticket.assigned_to != user.id and user.role != UserRole.ADMIN:
             raise PermissionDeniedException("只有被指定的处理人或管理员可以处理此工单")
 
@@ -459,13 +405,10 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: ComplaintResolve,
     ) -> ComplaintTicketResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
         ticket.final_conclusion = data.final_conclusion
         ticket.status = data.status if data.status else ComplaintStatus.RESOLVED
@@ -477,13 +420,10 @@ class ComplaintsController(Controller):
 
     @delete("/{ticket_id:int}", status_code=200)
     async def delete_complaint(self, request: Request, db: Session, ticket_id: int) -> dict:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("只有管理员可以删除投诉工单")
+        user = get_current_user(request, db)
+        require_admin(user)
 
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
         db.delete(ticket)
         db.commit()
@@ -497,13 +437,10 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: CompensationCreate,
     ) -> CompensationResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
-        if not ticket:
-            raise HTTPException(status_code=404, detail="投诉工单不存在")
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
 
         existing = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == ticket_id).first()
         if existing:
@@ -532,9 +469,8 @@ class ComplaintsController(Controller):
         ticket_id: int,
         data: CompensationUpdate,
     ) -> CompensationResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
         compensation = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == ticket_id).first()
         if not compensation:
@@ -560,9 +496,8 @@ class ComplaintsController(Controller):
         db: Session,
         ticket_id: int,
     ) -> CompensationResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("只有管理员可以审批补偿方案")
+        user = get_current_user(request, db)
+        require_admin(user)
 
         compensation = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == ticket_id).first()
         if not compensation:
@@ -582,9 +517,8 @@ class ComplaintsController(Controller):
         db: Session,
         ticket_id: int,
     ) -> CompensationResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
         compensation = db.query(CompensationRecord).filter(CompensationRecord.complaint_id == ticket_id).first()
         if not compensation:
@@ -594,7 +528,7 @@ class ComplaintsController(Controller):
         compensation.executed_at = datetime.utcnow()
         compensation.executed_by = user.id
 
-        ticket = db.query(ComplaintTicket).filter(ComplaintTicket.id == ticket_id).first()
+        ticket = get_or_404(db, ComplaintTicket, ticket_id, "投诉工单")
         if ticket and ticket.status not in [ComplaintStatus.RESOLVED, ComplaintStatus.CLOSED]:
             ticket.status = ComplaintStatus.COMPENSATED
 
@@ -606,7 +540,7 @@ class ComplaintsController(Controller):
     async def get_complaint_dashboard_stats(
         self, request: Request, db: Session
     ) -> ComplaintDashboardStats:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         now = datetime.utcnow()
         thirty_days_ago = now - timedelta(days=30)
 
@@ -636,9 +570,9 @@ class ComplaintsController(Controller):
             if t.status not in [ComplaintStatus.RESOLVED, ComplaintStatus.CLOSED, ComplaintStatus.CANCELLED]:
                 if t.process_deadline and t.process_deadline < now:
                     overdue_count += 1
-                    order = db.query(Order).filter(Order.id == t.order_id).first()
-                    customer = db.query(User).filter(User.id == t.customer_id).first()
-                    assignee = db.query(User).filter(User.id == t.assigned_to).first() if t.assigned_to else None
+                    order = OrderService.get_by_id(db, t.order_id)
+                    customer = UserService.get_by_id(db, t.customer_id)
+                    assignee = UserService.get_by_id(db, t.assigned_to) if t.assigned_to else None
                     overdue_days = (now - t.process_deadline).days
                     if len(overdue_complaints_list) < 10:
                         overdue_complaints_list.append(OverdueComplaintItem(

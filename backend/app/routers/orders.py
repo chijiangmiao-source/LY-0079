@@ -4,13 +4,21 @@ from datetime import datetime, date
 from litestar import Router, get, post, put, delete, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+    require_admin,
+    check_order_permission,
+    get_or_404,
+)
 from app.models import User, UserRole, Order, OrderStatus, PhotoSheet
+from app.services.user_service import UserService
+from app.services.order_service import OrderService
+from app.services.common import ResponseAssembler
 from app.schemas.orders import (
     OrderCreate,
     OrderUpdate,
@@ -26,87 +34,14 @@ def provide_db() -> Session:
     return next(get_db())
 
 
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
-
-
 def generate_order_no() -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     return f"ORD{timestamp}{uuid.uuid4().hex[:6].upper()}"
 
 
-def check_schedule_conflict(
-    db: Session,
-    photographer_id: int,
-    shoot_time_start: datetime,
-    shoot_time_end: datetime,
-    exclude_order_id: Optional[int] = None,
-) -> List[Order]:
-    if not photographer_id or not shoot_time_start or not shoot_time_end:
-        return []
-
-    query = db.query(Order).filter(
-        Order.photographer_id == photographer_id,
-        Order.shoot_time_start.isnot(None),
-        Order.shoot_time_end.isnot(None),
-        Order.status != OrderStatus.CANCELLED,
-        or_(
-            and_(
-                Order.shoot_time_start <= shoot_time_start,
-                Order.shoot_time_end > shoot_time_start,
-            ),
-            and_(
-                Order.shoot_time_start < shoot_time_end,
-                Order.shoot_time_end >= shoot_time_end,
-            ),
-            and_(
-                Order.shoot_time_start >= shoot_time_start,
-                Order.shoot_time_end <= shoot_time_end,
-            ),
-        ),
-    )
-
-    if exclude_order_id:
-        query = query.filter(Order.id != exclude_order_id)
-
-    return query.all()
-
-
 class OrdersController(Controller):
     path = "/orders"
     dependencies = {"db": Provide(provide_db)}
-
-    def _check_permission(self, order: Order, user: User) -> None:
-        if user.role in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            return
-        if user.role == UserRole.CUSTOMER and order.customer_id == user.id:
-            return
-        if user.role == UserRole.RETOUCHER:
-            return
-        raise PermissionDeniedException("权限不足")
 
     @get("/")
     async def list_orders(
@@ -122,15 +57,10 @@ class OrdersController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[OrderListItem]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(Order)
+        query = OrderService.apply_role_filter(query, user)
 
-        if user.role == UserRole.CUSTOMER:
-            query = query.filter(Order.customer_id == user.id)
-        elif user.role == UserRole.PHOTOGRAPHER:
-            query = query.filter(
-                (Order.photographer_id == user.id) | (Order.photographer_id.is_(None))
-            )
         if status:
             query = query.filter(Order.status == status)
         if customer_id and user.role in [UserRole.ADMIN]:
@@ -146,15 +76,7 @@ class OrdersController(Controller):
             query = query.filter(Order.city == city)
 
         orders = query.order_by(Order.created_at.desc()).offset(skip).limit(limit).all()
-        result = []
-        for o in orders:
-            customer = db.query(User).filter(User.id == o.customer_id).first()
-            photographer = db.query(User).filter(User.id == o.photographer_id).first() if o.photographer_id else None
-            item = OrderListItem.model_validate(o)
-            item.customer_name = customer.full_name if customer else None
-            item.photographer_name = photographer.full_name if photographer else None
-            result.append(item)
-        return result
+        return ResponseAssembler.build_order_list_response(db, orders, OrderListItem)
 
     @get("/check-schedule")
     async def check_schedule(
@@ -166,17 +88,16 @@ class OrdersController(Controller):
         shoot_time_end: datetime,
         order_id: Optional[int] = None,
     ) -> ScheduleConflict:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        conflicts = check_schedule_conflict(
+        conflicts = OrderService.check_schedule_conflict(
             db, photographer_id, shoot_time_start, shoot_time_end, order_id
         )
 
         conflicting_orders: List[ScheduleConflictOrder] = []
         for o in conflicts:
-            customer = db.query(User).filter(User.id == o.customer_id).first()
+            customer = UserService.get_by_id(db, o.customer_id)
             conflicting_orders.append(
                 ScheduleConflictOrder(
                     order_id=o.id,
@@ -195,14 +116,12 @@ class OrdersController(Controller):
 
     @get("/{order_id:int}")
     async def get_order(self, request: Request, db: Session, order_id: int) -> OrderDetailResponse:
-        user = get_current_user_from_request(request, db)
-        order = db.query(Order).filter(Order.id == order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
-        self._check_permission(order, user)
+        user = get_current_user(request, db)
+        order = get_or_404(db, Order, order_id, "订单")
+        check_order_permission(order, user)
 
-        customer = db.query(User).filter(User.id == order.customer_id).first()
-        photographer = db.query(User).filter(User.id == order.photographer_id).first() if order.photographer_id else None
+        customer = UserService.get_by_id(db, order.customer_id)
+        photographer = UserService.get_by_id(db, order.photographer_id) if order.photographer_id else None
         sheet_count = db.query(PhotoSheet).filter(PhotoSheet.order_id == order.id).count()
         photo_count = sum(s.total_photos for s in db.query(PhotoSheet).filter(PhotoSheet.order_id == order.id).all())
 
@@ -215,28 +134,20 @@ class OrdersController(Controller):
 
     @post("/")
     async def create_order(self, request: Request, db: Session, data: OrderCreate) -> OrderResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("只有管理员和摄影师可以创建订单")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
         if user.role == UserRole.PHOTOGRAPHER and not data.photographer_id:
             data.photographer_id = user.id
 
         if data.photographer_id and data.shoot_time_start and data.shoot_time_end:
-            conflicts = check_schedule_conflict(
+            conflicts = OrderService.check_schedule_conflict(
                 db, data.photographer_id, data.shoot_time_start, data.shoot_time_end
             )
             if conflicts:
-                conflict_info = []
-                for o in conflicts:
-                    customer = db.query(User).filter(User.id == o.customer_id).first()
-                    time_str = o.shoot_time_start.strftime("%Y-%m-%d %H:%M") if o.shoot_time_start else ""
-                    if o.shoot_time_end:
-                        time_str += " - " + o.shoot_time_end.strftime("%H:%M")
-                    conflict_info.append(f"{o.order_no}({customer.full_name if customer else '未知客户'} {time_str})")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"摄影师档期冲突：{'; '.join(conflict_info)}",
+                    detail=f"摄影师档期冲突：{OrderService.format_conflict_info(db, conflicts)}",
                 )
 
         order = Order(
@@ -256,12 +167,9 @@ class OrdersController(Controller):
         order_id: int,
         data: OrderUpdate,
     ) -> OrderResponse:
-        user = get_current_user_from_request(request, db)
-        order = db.query(Order).filter(Order.id == order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        order = get_or_404(db, Order, order_id, "订单")
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
         update_data = data.model_dump(exclude_unset=True)
 
@@ -270,20 +178,13 @@ class OrdersController(Controller):
         shoot_time_end = update_data.get("shoot_time_end", order.shoot_time_end)
 
         if photographer_id and shoot_time_start and shoot_time_end:
-            conflicts = check_schedule_conflict(
+            conflicts = OrderService.check_schedule_conflict(
                 db, photographer_id, shoot_time_start, shoot_time_end, order_id
             )
             if conflicts:
-                conflict_info = []
-                for o in conflicts:
-                    customer = db.query(User).filter(User.id == o.customer_id).first()
-                    time_str = o.shoot_time_start.strftime("%Y-%m-%d %H:%M") if o.shoot_time_start else ""
-                    if o.shoot_time_end:
-                        time_str += " - " + o.shoot_time_end.strftime("%H:%M")
-                    conflict_info.append(f"{o.order_no}({customer.full_name if customer else '未知客户'} {time_str})")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"摄影师档期冲突：{'; '.join(conflict_info)}",
+                    detail=f"摄影师档期冲突：{OrderService.format_conflict_info(db, conflicts)}",
                 )
 
         for key, value in update_data.items():
@@ -295,12 +196,9 @@ class OrdersController(Controller):
 
     @delete("/{order_id:int}", status_code=200)
     async def delete_order(self, request: Request, db: Session, order_id: int) -> dict:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("只有管理员可以删除订单")
-        order = db.query(Order).filter(Order.id == order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
+        user = get_current_user(request, db)
+        require_admin(user)
+        order = get_or_404(db, Order, order_id, "订单")
         db.delete(order)
         db.commit()
         return {"message": "订单已删除"}

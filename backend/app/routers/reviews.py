@@ -1,19 +1,27 @@
 from typing import List, Optional
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from litestar import Router, get, post, put, delete, Request
 from litestar.controller import Controller
 from litestar.di import Provide
-from litestar.exceptions import HTTPException, NotAuthorizedException, PermissionDeniedException
+from litestar.exceptions import HTTPException, PermissionDeniedException
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import func
 
 from app.core.database import get_db
-from app.core.security import decode_token
+from app.core.auth import (
+    get_current_user,
+    require_roles,
+    require_admin,
+    check_order_permission,
+    get_or_404,
+)
 from app.models import (
     User, UserRole, Order, OrderStatus, CustomerReview, FollowUpRecord,
     FollowUpStatus, AfterSalesResult,
 )
 from app.routers.complaints import auto_create_complaint_from_review
+from app.services.user_service import UserService
+from app.services.order_service import OrderService
 from app.schemas.reviews import (
     CustomerReviewCreate,
     CustomerReviewUpdate,
@@ -35,46 +43,12 @@ def provide_db() -> Session:
     return next(get_db())
 
 
-def get_current_user_from_request(request: Request, db: Session) -> User:
-    auth_header = request.headers.get("Authorization")
-    if not auth_header:
-        raise NotAuthorizedException("未提供认证令牌")
-    try:
-        scheme, token = auth_header.split()
-        if scheme.lower() != "bearer":
-            raise NotAuthorizedException("认证方案无效")
-    except ValueError:
-        raise NotAuthorizedException("认证头格式无效")
-
-    payload = decode_token(token)
-    if not payload:
-        raise NotAuthorizedException("令牌无效或已过期")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise NotAuthorizedException("令牌内容无效")
-
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if not user:
-        raise NotAuthorizedException("用户不存在")
-    if not user.is_active:
-        raise NotAuthorizedException("用户已被禁用")
-    return user
-
-
 REVIEW_DEADLINE_DAYS = 7
 
 
 class ReviewsController(Controller):
     path = "/reviews"
     dependencies = {"db": Provide(provide_db)}
-
-    def _check_order_permission(self, order: Order, user: User) -> None:
-        if user.role in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            return
-        if user.role == UserRole.CUSTOMER and order.customer_id == user.id:
-            return
-        raise PermissionDeniedException("权限不足")
 
     @get("/follow-ups")
     async def list_follow_ups(
@@ -89,15 +63,9 @@ class ReviewsController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[FollowUpListItem]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(FollowUpRecord).join(Order, FollowUpRecord.order_id == Order.id)
-
-        if user.role == UserRole.CUSTOMER:
-            query = query.filter(Order.customer_id == user.id)
-        elif user.role == UserRole.PHOTOGRAPHER:
-            query = query.filter(
-                (Order.photographer_id == user.id) | (Order.photographer_id.is_(None))
-            )
+        query = OrderService.apply_role_filter(query, user)
 
         if status:
             query = query.filter(FollowUpRecord.status == status)
@@ -113,9 +81,9 @@ class ReviewsController(Controller):
         records = query.order_by(FollowUpRecord.created_at.desc()).offset(skip).limit(limit).all()
         result: List[FollowUpListItem] = []
         for r in records:
-            order = db.query(Order).filter(Order.id == r.order_id).first()
-            customer = db.query(User).filter(User.id == order.customer_id).first() if order else None
-            photographer = db.query(User).filter(User.id == order.photographer_id).first() if order and order.photographer_id else None
+            order = OrderService.get_by_id(db, r.order_id)
+            customer = UserService.get_by_id(db, order.customer_id) if order else None
+            photographer = UserService.get_by_id(db, order.photographer_id) if order and order.photographer_id else None
             review = db.query(CustomerReview).filter(CustomerReview.order_id == r.order_id).first()
 
             item = FollowUpListItem.model_validate(r)
@@ -132,19 +100,15 @@ class ReviewsController(Controller):
     async def get_follow_up(
         self, request: Request, db: Session, record_id: int
     ) -> FollowUpRecordDetail:
-        user = get_current_user_from_request(request, db)
-        record = db.query(FollowUpRecord).filter(FollowUpRecord.id == record_id).first()
-        if not record:
-            raise HTTPException(status_code=404, detail="回访记录不存在")
+        user = get_current_user(request, db)
+        record = get_or_404(db, FollowUpRecord, record_id, "回访记录")
 
-        order = db.query(Order).filter(Order.id == record.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="关联订单不存在")
-        self._check_order_permission(order, user)
+        order = get_or_404(db, Order, record.order_id, "关联订单")
+        check_order_permission(order, user)
 
-        customer = db.query(User).filter(User.id == order.customer_id).first()
-        photographer = db.query(User).filter(User.id == order.photographer_id).first() if order.photographer_id else None
-        follow_up_user = db.query(User).filter(User.id == record.follow_up_by).first() if record.follow_up_by else None
+        customer = UserService.get_by_id(db, order.customer_id)
+        photographer = UserService.get_by_id(db, order.photographer_id) if order.photographer_id else None
+        follow_up_user = UserService.get_by_id(db, record.follow_up_by) if record.follow_up_by else None
         review = db.query(CustomerReview).filter(CustomerReview.order_id == record.order_id).first()
 
         resp = FollowUpRecordDetail.model_validate(record)
@@ -162,13 +126,10 @@ class ReviewsController(Controller):
     async def create_follow_up(
         self, request: Request, db: Session, data: FollowUpRecordCreate
     ) -> FollowUpRecordResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("只有管理员和摄影师可以创建回访记录")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        order = db.query(Order).filter(Order.id == data.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
+        order = get_or_404(db, Order, data.order_id, "订单")
 
         existing = db.query(FollowUpRecord).filter(FollowUpRecord.order_id == data.order_id).first()
         if existing:
@@ -191,13 +152,10 @@ class ReviewsController(Controller):
         record_id: int,
         data: FollowUpRecordUpdate,
     ) -> FollowUpRecordResponse:
-        user = get_current_user_from_request(request, db)
-        if user.role not in [UserRole.ADMIN, UserRole.PHOTOGRAPHER]:
-            raise PermissionDeniedException("权限不足")
+        user = get_current_user(request, db)
+        require_roles(user, UserRole.ADMIN, UserRole.PHOTOGRAPHER)
 
-        record = db.query(FollowUpRecord).filter(FollowUpRecord.id == record_id).first()
-        if not record:
-            raise HTTPException(status_code=404, detail="回访记录不存在")
+        record = get_or_404(db, FollowUpRecord, record_id, "回访记录")
 
         update_data = data.model_dump(exclude_unset=True)
         for key, value in update_data.items():
@@ -214,13 +172,10 @@ class ReviewsController(Controller):
 
     @delete("/follow-ups/{record_id:int}", status_code=200)
     async def delete_follow_up(self, request: Request, db: Session, record_id: int) -> dict:
-        user = get_current_user_from_request(request, db)
-        if user.role != UserRole.ADMIN:
-            raise PermissionDeniedException("只有管理员可以删除回访记录")
+        user = get_current_user(request, db)
+        require_admin(user)
 
-        record = db.query(FollowUpRecord).filter(FollowUpRecord.id == record_id).first()
-        if not record:
-            raise HTTPException(status_code=404, detail="回访记录不存在")
+        record = get_or_404(db, FollowUpRecord, record_id, "回访记录")
 
         db.delete(record)
         db.commit()
@@ -238,15 +193,9 @@ class ReviewsController(Controller):
         skip: int = 0,
         limit: int = 100,
     ) -> List[CustomerReviewDetail]:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         query = db.query(CustomerReview).join(Order, CustomerReview.order_id == Order.id)
-
-        if user.role == UserRole.CUSTOMER:
-            query = query.filter(Order.customer_id == user.id)
-        elif user.role == UserRole.PHOTOGRAPHER:
-            query = query.filter(
-                (Order.photographer_id == user.id) | (Order.photographer_id.is_(None))
-            )
+        query = OrderService.apply_role_filter(query, user)
 
         if order_id:
             query = query.filter(CustomerReview.order_id == order_id)
@@ -260,9 +209,9 @@ class ReviewsController(Controller):
         reviews = query.order_by(CustomerReview.submitted_at.desc()).offset(skip).limit(limit).all()
         result: List[CustomerReviewDetail] = []
         for r in reviews:
-            order = db.query(Order).filter(Order.id == r.order_id).first()
-            customer = db.query(User).filter(User.id == order.customer_id).first() if order else None
-            photographer = db.query(User).filter(User.id == order.photographer_id).first() if order and order.photographer_id else None
+            order = OrderService.get_by_id(db, r.order_id)
+            customer = UserService.get_by_id(db, order.customer_id) if order else None
+            photographer = UserService.get_by_id(db, order.photographer_id) if order and order.photographer_id else None
 
             item = CustomerReviewDetail.model_validate(r)
             item.order_no = order.order_no if order else None
@@ -275,18 +224,14 @@ class ReviewsController(Controller):
     async def get_customer_review(
         self, request: Request, db: Session, review_id: int
     ) -> CustomerReviewDetail:
-        user = get_current_user_from_request(request, db)
-        review = db.query(CustomerReview).filter(CustomerReview.id == review_id).first()
-        if not review:
-            raise HTTPException(status_code=404, detail="客户评价不存在")
+        user = get_current_user(request, db)
+        review = get_or_404(db, CustomerReview, review_id, "客户评价")
 
-        order = db.query(Order).filter(Order.id == review.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="关联订单不存在")
-        self._check_order_permission(order, user)
+        order = get_or_404(db, Order, review.order_id, "关联订单")
+        check_order_permission(order, user)
 
-        customer = db.query(User).filter(User.id == order.customer_id).first()
-        photographer = db.query(User).filter(User.id == order.photographer_id).first() if order.photographer_id else None
+        customer = UserService.get_by_id(db, order.customer_id)
+        photographer = UserService.get_by_id(db, order.photographer_id) if order.photographer_id else None
 
         resp = CustomerReviewDetail.model_validate(review)
         resp.order_no = order.order_no
@@ -298,11 +243,9 @@ class ReviewsController(Controller):
     async def create_customer_review(
         self, request: Request, db: Session, data: CustomerReviewCreate
     ) -> CustomerReviewResponse:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
 
-        order = db.query(Order).filter(Order.id == data.order_id).first()
-        if not order:
-            raise HTTPException(status_code=404, detail="订单不存在")
+        order = get_or_404(db, Order, data.order_id, "订单")
 
         if user.role == UserRole.CUSTOMER and order.customer_id != user.id:
             raise PermissionDeniedException("只能评价自己的订单")
@@ -337,12 +280,10 @@ class ReviewsController(Controller):
         review_id: int,
         data: CustomerReviewUpdate,
     ) -> CustomerReviewResponse:
-        user = get_current_user_from_request(request, db)
-        review = db.query(CustomerReview).filter(CustomerReview.id == review_id).first()
-        if not review:
-            raise HTTPException(status_code=404, detail="客户评价不存在")
+        user = get_current_user(request, db)
+        review = get_or_404(db, CustomerReview, review_id, "客户评价")
 
-        order = db.query(Order).filter(Order.id == review.order_id).first()
+        order = OrderService.get_by_id(db, review.order_id)
         if user.role == UserRole.CUSTOMER:
             if not order or order.customer_id != user.id:
                 raise PermissionDeniedException("权限不足")
@@ -359,10 +300,9 @@ class ReviewsController(Controller):
     async def get_review_dashboard_stats(
         self, request: Request, db: Session
     ) -> ReviewDashboardStats:
-        user = get_current_user_from_request(request, db)
+        user = get_current_user(request, db)
         now = datetime.utcnow()
         thirty_days_ago = now - timedelta(days=30)
-        seven_days_ago = now - timedelta(days=7)
 
         reviews_query = db.query(CustomerReview).filter(
             CustomerReview.submitted_at >= thirty_days_ago
@@ -420,9 +360,9 @@ class ReviewsController(Controller):
 
         low_score_orders: List[LowScoreOrder] = []
         for r in low_score_reviews:
-            order = db.query(Order).filter(Order.id == r.order_id).first()
-            customer = db.query(User).filter(User.id == order.customer_id).first() if order else None
-            photographer = db.query(User).filter(User.id == order.photographer_id).first() if order and order.photographer_id else None
+            order = OrderService.get_by_id(db, r.order_id)
+            customer = UserService.get_by_id(db, order.customer_id) if order else None
+            photographer = UserService.get_by_id(db, order.photographer_id) if order and order.photographer_id else None
             follow_up = db.query(FollowUpRecord).filter(FollowUpRecord.order_id == r.order_id).first()
 
             low_score_orders.append(
