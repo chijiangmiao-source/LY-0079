@@ -4,6 +4,7 @@ import type {
   OrderDetail,
   OrderListItem,
   OrderStatus,
+  ScheduleConflict,
   PhotoSheet,
   PhotoSheetDetail,
   PhotoSheetListItem,
@@ -18,15 +19,32 @@ import type {
   RetoucherWorkload,
   OrderSelectionProgress,
   OverdueSheet,
+  UpcomingShootOrder,
+  PhotographerScheduleStat,
 } from '$lib/types';
+export { authApi, usersApi } from './auth';
 
 export const ordersApi = {
-  list: (params?: { status?: OrderStatus; customer_id?: number; skip?: number; limit?: number }) =>
-    api.get<OrderListItem[]>('/orders/', { params }).then((r) => r.data),
+  list: (params?: {
+    status?: OrderStatus;
+    customer_id?: number;
+    photographer_id?: number;
+    shoot_date_from?: string;
+    shoot_date_to?: string;
+    city?: string;
+    skip?: number;
+    limit?: number;
+  }) => api.get<OrderListItem[]>('/orders/', { params }).then((r) => r.data),
   get: (id: number) => api.get<OrderDetail>(`/orders/${id}`).then((r) => r.data),
   create: (data: any) => api.post<Order>('/orders/', data).then((r) => r.data),
   update: (id: number, data: any) => api.put<Order>(`/orders/${id}`, data).then((r) => r.data),
   delete: (id: number) => api.delete(`/orders/${id}`).then((r) => r.data),
+  checkSchedule: (params: {
+    photographer_id: number;
+    shoot_time_start: string;
+    shoot_time_end: string;
+    order_id?: number;
+  }) => api.get<ScheduleConflict>('/orders/check-schedule', { params }).then((r) => r.data),
 };
 
 export const sheetsApi = {
@@ -92,4 +110,7 @@ export const dashboardApi = {
   retouchersWorkload: () => api.get<RetoucherWorkload[]>('/dashboard/retouchers-workload').then((r) => r.data),
   selectionProgress: () => api.get<OrderSelectionProgress[]>('/dashboard/selection-progress').then((r) => r.data),
   overdueSheets: () => api.get<OverdueSheet[]>('/dashboard/overdue-sheets').then((r) => r.data),
+  upcomingShoots: () => api.get<UpcomingShootOrder[]>('/dashboard/upcoming-shoots').then((r) => r.data),
+  photographerScheduleStats: () =>
+    api.get<PhotographerScheduleStat[]>('/dashboard/photographer-schedule-stats').then((r) => r.data),
 };

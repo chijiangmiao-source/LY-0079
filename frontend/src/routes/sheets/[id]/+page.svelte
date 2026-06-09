@@ -68,7 +68,7 @@
   async function loadData() {
     loading = true;
     try {
-      const id = parseInt($page.params.id);
+      const id = parseInt($page.params.id || '0');
       sheet = await sheetsApi.get(id);
       selections = await selectionsApi.list({ sheet_id: id });
       retouchRequests = await retouchApi.list({ sheet_id: id });

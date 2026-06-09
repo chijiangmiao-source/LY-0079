@@ -28,6 +28,16 @@ export interface User {
   updated_at: string;
 }
 
+export interface UserListItem {
+  id: number;
+  username: string;
+  full_name: string;
+  role: UserRole;
+  email?: string;
+  phone?: string;
+  is_active: boolean;
+}
+
 export interface Order {
   id: number;
   order_no: string;
@@ -35,6 +45,10 @@ export interface Order {
   photographer_id?: number;
   shoot_type?: string;
   shoot_date?: string;
+  shoot_time_start?: string;
+  shoot_time_end?: string;
+  city?: string;
+  service_package?: string;
   location?: string;
   total_photos: number;
   included_retouches: number;
@@ -55,11 +69,31 @@ export interface OrderListItem {
   id: number;
   order_no: string;
   customer_name?: string;
+  photographer_name?: string;
+  photographer_id?: number;
   shoot_type?: string;
   shoot_date?: string;
+  shoot_time_start?: string;
+  shoot_time_end?: string;
+  city?: string;
+  service_package?: string;
   status: OrderStatus;
   total_photos: number;
   created_at: string;
+}
+
+export interface ScheduleConflictOrder {
+  order_id: number;
+  order_no: string;
+  customer_name?: string;
+  shoot_time_start?: string;
+  shoot_time_end?: string;
+  city?: string;
+}
+
+export interface ScheduleConflict {
+  has_conflict: boolean;
+  conflicting_orders: ScheduleConflictOrder[];
 }
 
 export interface PhotoSheet {
@@ -183,6 +217,28 @@ export interface OverdueSheet {
   lock_status: string;
 }
 
+export interface UpcomingShootOrder {
+  order_id: number;
+  order_no: string;
+  customer_name?: string;
+  photographer_id?: number;
+  photographer_name?: string;
+  shoot_date?: string;
+  shoot_time_start?: string;
+  shoot_time_end?: string;
+  city?: string;
+  service_package?: string;
+  status: string;
+}
+
+export interface PhotographerScheduleStat {
+  photographer_id: number;
+  photographer_name: string;
+  total_orders: number;
+  occupied_days: number;
+  upcoming_orders: UpcomingShootOrder[];
+}
+
 export interface DashboardStats {
   total_orders: number;
   total_sheets: number;
@@ -193,6 +249,8 @@ export interface DashboardStats {
   retouchers_workload: RetoucherWorkload[];
   selection_progress: OrderSelectionProgress[];
   overdue_sheets: OverdueSheet[];
+  upcoming_shoots: UpcomingShootOrder[];
+  photographer_schedule_stats: PhotographerScheduleStat[];
 }
 
 export interface DashboardResponse {

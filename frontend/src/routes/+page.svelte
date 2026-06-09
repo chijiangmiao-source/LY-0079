@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { dashboardApi } from '$lib/api';
   import type { DashboardResponse } from '$lib/types';
-  import { formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap } from '$lib/utils';
+  import { formatDate, formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap } from '$lib/utils';
   import {
     FileText,
     Image,
@@ -11,10 +11,22 @@
     AlertTriangle,
     Package,
     TrendingUp,
+    Calendar,
+    Camera,
+    MapPin,
+    Clock,
   } from 'lucide-svelte';
 
   let data: DashboardResponse | null = null;
   let loading = true;
+
+  function formatShootTime(start?: string, end?: string): string {
+    if (!start && !end) return '-';
+    if (start && end) {
+      return `${formatDateTime(start, 'HH:mm')} - ${formatDateTime(end, 'HH:mm')}`;
+    }
+    return formatDateTime(start || end, 'HH:mm');
+  }
 
   onMount(async () => {
     try {
@@ -106,6 +118,129 @@
         </div>
       </div>
     </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="card lg:col-span-2">
+        <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+          <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+            <Calendar class="w-5 h-5 mr-2 text-orange-500" />
+            未来7天待拍摄订单
+          </h2>
+          <span class="text-sm text-gray-500">共 {data.stats.upcoming_shoots.length} 单</span>
+        </div>
+        <div class="overflow-x-auto">
+          {#if data.stats.upcoming_shoots.length === 0}
+            <p class="text-gray-500 text-center py-8">暂无待拍摄订单</p>
+          {:else}
+            <table class="w-full">
+              <thead class="bg-gray-50">
+                <tr>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">订单号</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">客户</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">摄影师</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">套餐</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">日期</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">时间段</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">城市</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">状态</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-200">
+                {#each data.stats.upcoming_shoots as shoot}
+                  <tr class="hover:bg-gray-50">
+                    <td class="px-6 py-4 text-sm font-medium text-gray-900">
+                      <a href="/orders/{shoot.order_id}" class="text-primary-600 hover:text-primary-900">
+                        {shoot.order_no}
+                      </a>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-600">{shoot.customer_name || '-'}</td>
+                    <td class="px-6 py-4 text-sm text-gray-600">
+                      <div class="flex items-center">
+                        <Camera class="w-4 h-4 mr-1 text-gray-400" />
+                        {shoot.photographer_name || '-'}
+                      </div>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-600">{shoot.service_package || '-'}</td>
+                    <td class="px-6 py-4 text-sm text-gray-600">{formatDate(shoot.shoot_date)}</td>
+                    <td class="px-6 py-4 text-sm text-gray-600">
+                      <div class="flex items-center">
+                        <Clock class="w-4 h-4 mr-1 text-gray-400" />
+                        {formatShootTime(shoot.shoot_time_start, shoot.shoot_time_end)}
+                      </div>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-600">
+                      <div class="flex items-center">
+                        <MapPin class="w-4 h-4 mr-1 text-gray-400" />
+                        {shoot.city || '-'}
+                      </div>
+                    </td>
+                    <td class="px-6 py-4">
+                      <span class="badge {getStatusBadge(orderStatusMap, shoot.status).color}">
+                        {getStatusBadge(orderStatusMap, shoot.status).label}
+                      </span>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    {#if data.stats.photographer_schedule_stats.length > 0}
+      <div class="card mb-6">
+        <div class="p-6 border-b border-gray-200">
+          <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+            <Camera class="w-5 h-5 mr-2 text-blue-500" />
+            摄影师档期占用统计
+          </h2>
+        </div>
+        <div class="p-6">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {#each data.stats.photographer_schedule_stats as ps}
+              <div class="border border-gray-200 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-3">
+                  <div class="flex items-center">
+                    <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                      <span class="text-blue-600 font-semibold">{ps.photographer_name.charAt(0)}</span>
+                    </div>
+                    <div class="ml-3">
+                      <p class="font-medium text-gray-900">{ps.photographer_name}</p>
+                      <p class="text-xs text-gray-500">累计 {ps.total_orders} 单 · 占用 {ps.occupied_days} 天</p>
+                    </div>
+                  </div>
+                </div>
+                {#if ps.upcoming_orders.length > 0}
+                  <div class="space-y-2">
+                    <p class="text-xs font-medium text-gray-500">未来7天档期 ({ps.upcoming_orders.length}单)：</p>
+                    {#each ps.upcoming_orders as uo}
+                      <div class="text-sm bg-gray-50 rounded p-2">
+                        <div class="flex items-center justify-between">
+                          <span class="text-gray-900 font-medium">{uo.customer_name || '-'}</span>
+                          <span class="badge {getStatusBadge(orderStatusMap, uo.status).color} text-xs">
+                            {getStatusBadge(orderStatusMap, uo.status).label}
+                          </span>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1 flex items-center flex-wrap gap-2">
+                          <span class="flex items-center"><Calendar class="w-3 h-3 mr-1" />{formatDate(uo.shoot_date)}</span>
+                          <span class="flex items-center"><Clock class="w-3 h-3 mr-1" />{formatShootTime(uo.shoot_time_start, uo.shoot_time_end)}</span>
+                          {#if uo.city}
+                            <span class="flex items-center"><MapPin class="w-3 h-3 mr-1" />{uo.city}</span>
+                          {/if}
+                        </div>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <p class="text-sm text-gray-400">未来7天暂无拍摄安排</p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div class="card">

@@ -44,7 +44,7 @@
   async function loadData() {
     loading = true;
     try {
-      const id = parseInt($page.params.id);
+      const id = parseInt($page.params.id || '0');
       order = await ordersApi.get(id);
       const newSheets = await sheetsApi.list({ order_id: id });
       sheets = newSheets;
@@ -134,7 +134,37 @@
           <p class="text-sm text-gray-500">片单 / 照片</p>
           <p class="text-lg font-semibold mt-1">{sheets.length} / {sheets.reduce((sum, s) => sum + s.total_photos, 0)}</p>
         </div>
+        <div class="card p-4">
+          <p class="text-sm text-gray-500">服务套餐</p>
+          <p class="text-lg font-semibold mt-1">{order.service_package || '-'}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-sm text-gray-500">拍摄类型</p>
+          <p class="text-lg font-semibold mt-1">{order.shoot_type || '-'}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-sm text-gray-500">拍摄城市</p>
+          <p class="text-lg font-semibold mt-1">{order.city || '-'}</p>
+        </div>
+        <div class="card p-4">
+          <p class="text-sm text-gray-500">拍摄时间段</p>
+          <p class="text-lg font-semibold mt-1">
+            {#if order.shoot_time_start && order.shoot_time_end}
+              {formatDateTime(order.shoot_time_start, 'HH:mm')} - {formatDateTime(order.shoot_time_end, 'HH:mm')}
+            {:else if order.shoot_time_start}
+              {formatDateTime(order.shoot_time_start, 'HH:mm')}
+            {:else}
+              -
+            {/if}
+          </p>
+        </div>
       </div>
+      {#if order.location}
+        <div class="card p-4 mt-4">
+          <p class="text-sm text-gray-500 mb-2">拍摄地点</p>
+          <p class="text-gray-800">{order.location}</p>
+        </div>
+      {/if}
 
       {#if order.notes}
         <div class="card p-4 mt-4">
