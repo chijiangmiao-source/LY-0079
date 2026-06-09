@@ -12,6 +12,8 @@
     Users,
     LogOut,
     Camera,
+    MessageSquare,
+    Star,
   } from 'lucide-svelte';
 
   let user = getUser();
@@ -22,6 +24,8 @@
     { path: '/orders', label: '订单管理', icon: FolderKanban, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
     { path: '/sheets', label: '片单管理', icon: Image, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
     { path: '/delivery', label: '交付版本', icon: Package, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
+    { path: '/reviews/follow-ups', label: '回访管理', icon: MessageSquare, roles: ['admin', 'photographer'] },
+    { path: '/reviews/customer', label: '客户评价', icon: Star, roles: ['admin', 'photographer', 'retoucher', 'customer'] },
     { path: '/users', label: '用户管理', icon: Users, roles: ['admin'] },
   ];
 

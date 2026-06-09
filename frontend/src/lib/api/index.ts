@@ -21,6 +21,14 @@ import type {
   OverdueSheet,
   UpcomingShootOrder,
   PhotographerScheduleStat,
+  FollowUpStatus,
+  AfterSalesResult,
+  CustomerReview,
+  CustomerReviewDetail,
+  FollowUpRecord,
+  FollowUpRecordDetail,
+  FollowUpListItem,
+  ReviewDashboardStats,
 } from '$lib/types';
 export { authApi, usersApi } from './auth';
 
@@ -113,4 +121,62 @@ export const dashboardApi = {
   upcomingShoots: () => api.get<UpcomingShootOrder[]>('/dashboard/upcoming-shoots').then((r) => r.data),
   photographerScheduleStats: () =>
     api.get<PhotographerScheduleStat[]>('/dashboard/photographer-schedule-stats').then((r) => r.data),
+};
+
+export const reviewsApi = {
+  listFollowUps: (params?: {
+    status?: FollowUpStatus;
+    satisfaction_min?: number;
+    satisfaction_max?: number;
+    photographer_id?: number;
+    order_id?: number;
+    skip?: number;
+    limit?: number;
+  }) => api.get<FollowUpListItem[]>('/reviews/follow-ups', { params }).then((r) => r.data),
+  getFollowUp: (id: number) => api.get<FollowUpRecordDetail>(`/reviews/follow-ups/${id}`).then((r) => r.data),
+  createFollowUp: (data: {
+    order_id: number;
+    follow_up_time?: string;
+    satisfaction?: number;
+    tags?: string;
+    feedback?: string;
+    after_sales_result?: AfterSalesResult;
+    after_sales_notes?: string;
+    status?: FollowUpStatus;
+    review_deadline?: string;
+  }) => api.post<FollowUpRecord>('/reviews/follow-ups', data).then((r) => r.data),
+  updateFollowUp: (id: number, data: {
+    follow_up_time?: string;
+    satisfaction?: number;
+    tags?: string;
+    feedback?: string;
+    after_sales_result?: AfterSalesResult;
+    after_sales_notes?: string;
+    status?: FollowUpStatus;
+    review_deadline?: string;
+  }) => api.put<FollowUpRecord>(`/reviews/follow-ups/${id}`, data).then((r) => r.data),
+  deleteFollowUp: (id: number) => api.delete(`/reviews/follow-ups/${id}`).then((r) => r.data),
+  listCustomerReviews: (params?: {
+    order_id?: number;
+    rating_min?: number;
+    rating_max?: number;
+    photographer_id?: number;
+    skip?: number;
+    limit?: number;
+  }) => api.get<CustomerReviewDetail[]>('/reviews/customer', { params }).then((r) => r.data),
+  getCustomerReview: (id: number) => api.get<CustomerReviewDetail>(`/reviews/customer/${id}`).then((r) => r.data),
+  createCustomerReview: (data: {
+    order_id: number;
+    rating: number;
+    tags?: string;
+    feedback?: string;
+    is_anonymous?: boolean;
+  }) => api.post<CustomerReview>('/reviews/customer', data).then((r) => r.data),
+  updateCustomerReview: (id: number, data: {
+    rating?: number;
+    tags?: string;
+    feedback?: string;
+    is_anonymous?: boolean;
+  }) => api.put<CustomerReview>(`/reviews/customer/${id}`, data).then((r) => r.data),
+  getDashboardStats: () => api.get<ReviewDashboardStats>('/reviews/dashboard-stats').then((r) => r.data),
 };

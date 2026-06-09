@@ -1,5 +1,5 @@
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from litestar import Router, get, post, put, delete, Request
 from litestar.controller import Controller
 from litestar.di import Provide
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.security import decode_token
-from app.models import User, UserRole, Order, PhotoSheet, LockStatus, DeliveryVersion
+from app.models import User, UserRole, Order, PhotoSheet, LockStatus, DeliveryVersion, FollowUpRecord, FollowUpStatus, OrderStatus
 from app.schemas.delivery import (
     DeliveryVersionCreate,
     DeliveryVersionUpdate,
@@ -125,7 +125,17 @@ class DeliveryController(Controller):
         )
         db.add(version)
 
-        order.status = "delivered"
+        order.status = OrderStatus.DELIVERED
+
+        existing_follow_up = db.query(FollowUpRecord).filter(FollowUpRecord.order_id == order.id).first()
+        if not existing_follow_up:
+            follow_up = FollowUpRecord(
+                order_id=order.id,
+                status=FollowUpStatus.PENDING,
+                review_deadline=datetime.utcnow() + timedelta(days=7),
+            )
+            db.add(follow_up)
+
         db.commit()
         db.refresh(version)
         return DeliveryVersionResponse.model_validate(version)

@@ -70,6 +70,8 @@ class Order(Base):
     photo_sheets = relationship("PhotoSheet", back_populates="order", cascade="all, delete-orphan")
     photo_batches = relationship("PhotoBatch", back_populates="order", cascade="all, delete-orphan")
     delivery_versions = relationship("DeliveryVersion", back_populates="order", cascade="all, delete-orphan")
+    customer_review = relationship("CustomerReview", back_populates="order", uselist=False, cascade="all, delete-orphan")
+    follow_up_records = relationship("FollowUpRecord", back_populates="order", cascade="all, delete-orphan")
 
 
 class RetouchStatus(str, enum.Enum):
@@ -185,3 +187,54 @@ class DeliveryVersion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     order = relationship("Order", back_populates="delivery_versions")
+
+
+class FollowUpStatus(str, enum.Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class AfterSalesResult(str, enum.Enum):
+    RESOLVED = "resolved"
+    PARTIALLY_RESOLVED = "partially_resolved"
+    UNRESOLVED = "unresolved"
+    NO_ISSUES = "no_issues"
+
+
+class CustomerReview(Base):
+    __tablename__ = "customer_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, unique=True)
+    rating = Column(Integer, nullable=False)
+    tags = Column(String(500))
+    feedback = Column(Text)
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+    is_anonymous = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = relationship("Order", back_populates="customer_review")
+
+
+class FollowUpRecord(Base):
+    __tablename__ = "follow_up_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=False)
+    follow_up_time = Column(DateTime)
+    satisfaction = Column(Integer)
+    tags = Column(String(500))
+    feedback = Column(Text)
+    after_sales_result = Column(Enum(AfterSalesResult))
+    after_sales_notes = Column(Text)
+    status = Column(Enum(FollowUpStatus), default=FollowUpStatus.PENDING, nullable=False)
+    follow_up_by = Column(Integer, ForeignKey("users.id"))
+    review_deadline = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = relationship("Order", back_populates="follow_up_records")
+    follow_up_user = relationship("User", foreign_keys=[follow_up_by])

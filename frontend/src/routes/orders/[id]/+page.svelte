@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { ordersApi, sheetsApi } from '$lib/api';
-  import type { OrderDetail, PhotoSheetListItem } from '$lib/types';
+  import { ordersApi, sheetsApi, reviewsApi } from '$lib/api';
+  import type { OrderDetail, PhotoSheetListItem, CustomerReviewDetail } from '$lib/types';
   import {
     formatDate,
     formatDateTime,
@@ -11,13 +11,26 @@
     lockStatusMap,
     getStatusBadge,
   } from '$lib/utils';
-  import { ArrowLeft, Plus, X } from 'lucide-svelte';
+  import { getUser } from '$lib/utils/auth';
+  import { ArrowLeft, Plus, X, Star, Send, AlertCircle, CheckCircle2 } from 'lucide-svelte';
 
   let order: OrderDetail | null = null;
   let sheets: PhotoSheetListItem[] = [];
   let loading = true;
   let showCreateSheet = false;
   let sheetFormErrors: Record<string, string> = {};
+  let user = getUser();
+  let customerReview: CustomerReviewDetail | null = null;
+  let showReviewForm = false;
+  let savingReview = false;
+  let reviewError = '';
+
+  let reviewForm = {
+    rating: 0,
+    tags: '',
+    feedback: '',
+    is_anonymous: false,
+  };
 
   let sheetForm = {
     total_photos: 0,
@@ -48,8 +61,50 @@
       order = await ordersApi.get(id);
       const newSheets = await sheetsApi.list({ order_id: id });
       sheets = newSheets;
+
+      if (order?.status === 'delivered') {
+        try {
+          const reviews = await reviewsApi.listCustomerReviews({ order_id: id });
+          if (reviews.length > 0) {
+            customerReview = reviews[0];
+          }
+        } catch (e) {}
+      }
     } finally {
       loading = false;
+    }
+  }
+
+  function setReviewRating(val: number) {
+    reviewForm.rating = val;
+  }
+
+  async function handleSubmitReview() {
+    if (reviewForm.rating === 0) {
+      reviewError = '请选择评分';
+      return;
+    }
+    savingReview = true;
+    reviewError = '';
+    try {
+      const id = parseInt($page.params.id || '0');
+      const data: any = {
+        order_id: id,
+        rating: reviewForm.rating,
+        is_anonymous: reviewForm.is_anonymous,
+      };
+      if (reviewForm.tags.trim()) data.tags = reviewForm.tags.trim();
+      if (reviewForm.feedback.trim()) data.feedback = reviewForm.feedback.trim();
+
+      await reviewsApi.createCustomerReview(data);
+      showReviewForm = false;
+      reviewForm = { rating: 0, tags: '', feedback: '', is_anonymous: false };
+      await loadData();
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      reviewError = typeof detail === 'string' ? detail : '提交失败，请重试';
+    } finally {
+      savingReview = false;
     }
   }
 
@@ -221,6 +276,133 @@
         </table>
       {/if}
     </div>
+
+    {#if order && order.status === 'delivered'}
+      <div class="card mt-6">
+        <div class="p-6 border-b border-gray-200 flex items-center justify-between flex-wrap gap-3">
+          <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+            <Star class="w-5 h-5 mr-2 text-yellow-500" />
+            客户评价
+          </h2>
+          {#if !customerReview && user?.role === 'customer' && !showReviewForm}
+            <button class="btn btn-primary" on:click={() => (showReviewForm = true)}>
+              <Send class="w-4 h-4" />
+              提交评价
+            </button>
+          {/if}
+        </div>
+        <div class="p-6">
+          {#if customerReview}
+            <div class="space-y-4">
+              <div class="flex items-center gap-2">
+                {#each Array(5) as _, i}
+                  <Star
+                    class={`w-6 h-6 ${i < customerReview.rating ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}`}
+                  />
+                {/each}
+                <span class="ml-2 text-lg font-semibold text-gray-900">{customerReview.rating}/5</span>
+                {#if customerReview.is_anonymous}
+                  <span class="badge bg-gray-100 text-gray-600">匿名评价</span>
+                {/if}
+              </div>
+              <p class="text-sm text-gray-500">提交时间: {formatDateTime(customerReview.submitted_at)}</p>
+              {#if customerReview.tags}
+                <div class="flex flex-wrap gap-2">
+                  {#each customerReview.tags.split(',').filter((t) => t.trim()) as tag}
+                    <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                      {tag.trim()}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
+              {#if customerReview.feedback}
+                <p class="text-gray-700 leading-relaxed whitespace-pre-wrap">{customerReview.feedback}</p>
+              {/if}
+            </div>
+          {:else if showReviewForm && user?.role === 'customer'}
+            {#if reviewError}
+              <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex items-center">
+                <AlertCircle class="w-5 h-5 mr-2" />
+                {reviewError}
+              </div>
+            {/if}
+            <div class="space-y-4">
+              <div>
+                <label class="label">整体评分 <span class="text-red-500">*</span></label>
+                <div class="flex items-center gap-2 py-2">
+                  {#each Array(5) as _, i}
+                    <button
+                      type="button"
+                      class="focus:outline-none transition-transform hover:scale-110"
+                      on:click={() => setReviewRating(i + 1)}
+                    >
+                      <Star
+                        class={`w-9 h-9 ${i < reviewForm.rating ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300 hover:text-yellow-300'}`}
+                      />
+                    </button>
+                  {/each}
+                  {#if reviewForm.rating > 0}
+                    <span class="ml-2 text-lg font-semibold text-gray-700">{reviewForm.rating}/5</span>
+                  {/if}
+                </div>
+              </div>
+              <div>
+                <label class="label">评价标签（逗号分隔，选填）</label>
+                <input
+                  type="text"
+                  class="input"
+                  placeholder="如：服务好,照片精美,沟通顺畅"
+                  bind:value={reviewForm.tags}
+                />
+              </div>
+              <div>
+                <label class="label">评价内容（选填）</label>
+                <textarea
+                  class="input"
+                  rows="4"
+                  placeholder="分享您的体验和感受..."
+                  bind:value={reviewForm.feedback}
+                ></textarea>
+              </div>
+              <div class="flex items-center">
+                <input
+                  type="checkbox"
+                  id="anonymous"
+                  class="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
+                  bind:checked={reviewForm.is_anonymous}
+                />
+                <label for="anonymous" class="ml-2 text-sm text-gray-700">匿名评价</label>
+              </div>
+              <div class="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  class="btn btn-secondary flex-1"
+                  on:click={() => {
+                    showReviewForm = false;
+                    reviewError = '';
+                    reviewForm = { rating: 0, tags: '', feedback: '', is_anonymous: false };
+                  }}
+                >
+                  取消
+                </button>
+                <button type="button" class="btn btn-primary flex-1" on:click={handleSubmitReview} disabled={savingReview}>
+                  {#if savingReview}
+                    提交中...
+                  {:else}
+                    <CheckCircle2 class="w-5 h-5" />
+                    提交评价
+                  {/if}
+                </button>
+              </div>
+            </div>
+          {:else}
+            <p class="text-gray-500 text-center py-4">
+              {user?.role === 'customer' ? '您尚未提交评价，点击右上角按钮提交评价' : '客户暂未提交评价'}
+            </p>
+          {/if}
+        </div>
+      </div>
+    {/if}
   {/if}
 
   {#if showCreateSheet && order}

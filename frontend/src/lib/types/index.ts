@@ -257,3 +257,102 @@ export interface DashboardResponse {
   stats: DashboardStats;
   generated_at: string;
 }
+
+export type FollowUpStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
+export type AfterSalesResult = 'resolved' | 'partially_resolved' | 'unresolved' | 'no_issues';
+
+export interface CustomerReview {
+  id: number;
+  order_id: number;
+  rating: number;
+  tags?: string;
+  feedback?: string;
+  submitted_at: string;
+  is_anonymous: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomerReviewDetail extends CustomerReview {
+  order_no?: string;
+  customer_name?: string;
+  photographer_name?: string;
+}
+
+export interface FollowUpRecord {
+  id: number;
+  order_id: number;
+  follow_up_time?: string;
+  satisfaction?: number;
+  tags?: string;
+  feedback?: string;
+  after_sales_result?: AfterSalesResult;
+  after_sales_notes?: string;
+  status: FollowUpStatus;
+  follow_up_by?: number;
+  review_deadline?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FollowUpRecordDetail extends FollowUpRecord {
+  order_no?: string;
+  customer_name?: string;
+  photographer_id?: number;
+  photographer_name?: string;
+  shoot_date?: string;
+  follow_up_by_name?: string;
+  customer_rating?: number;
+  review_submitted: boolean;
+}
+
+export interface FollowUpListItem {
+  id: number;
+  order_id: number;
+  order_no: string;
+  customer_name?: string;
+  photographer_id?: number;
+  photographer_name?: string;
+  shoot_date?: string;
+  status: FollowUpStatus;
+  satisfaction?: number;
+  follow_up_time?: string;
+  review_deadline?: string;
+  customer_rating?: number;
+  created_at: string;
+}
+
+export interface SatisfactionTrendItem {
+  date: string;
+  avg_satisfaction: number;
+  review_count: number;
+}
+
+export interface LowScoreOrder {
+  order_id: number;
+  order_no: string;
+  customer_name?: string;
+  photographer_name?: string;
+  rating: number;
+  feedback?: string;
+  tags?: string;
+  submitted_at: string;
+  follow_up_status?: string;
+}
+
+export interface PendingFollowUpStat {
+  total_pending: number;
+  pending_7d: number;
+  pending_overdue: number;
+  in_progress: number;
+  completed_last_7d: number;
+}
+
+export interface ReviewDashboardStats {
+  avg_rating_30d: number;
+  review_count_30d: number;
+  satisfaction_trend: SatisfactionTrendItem[];
+  low_score_orders: LowScoreOrder[];
+  pending_follow_up: PendingFollowUpStat;
+}

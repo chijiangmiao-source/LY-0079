@@ -11,6 +11,10 @@ from app.models.models import (
     RetouchRequest,
     RetouchRequestStatus,
     DeliveryVersion,
+    FollowUpStatus,
+    AfterSalesResult,
+    CustomerReview,
+    FollowUpRecord,
 )
 
 __all__ = [
@@ -26,4 +30,8 @@ __all__ = [
     "RetouchRequest",
     "RetouchRequestStatus",
     "DeliveryVersion",
+    "FollowUpStatus",
+    "AfterSalesResult",
+    "CustomerReview",
+    "FollowUpRecord",
 ]

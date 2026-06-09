@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { dashboardApi } from '$lib/api';
-  import type { DashboardResponse } from '$lib/types';
-  import { formatDate, formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap } from '$lib/utils';
+  import { dashboardApi, reviewsApi } from '$lib/api';
+  import type { DashboardResponse, ReviewDashboardStats } from '$lib/types';
+  import { formatDate, formatDateTime, lockStatusMap, getStatusBadge, orderStatusMap, followUpStatusMap } from '$lib/utils';
   import {
     FileText,
     Image,
@@ -15,9 +15,16 @@
     Camera,
     MapPin,
     Clock,
+    Star,
+    MessageSquare,
+    AlertCircle,
+    Clock3,
+    CheckCircle2,
+    BarChart3,
   } from 'lucide-svelte';
 
   let data: DashboardResponse | null = null;
+  let reviewStats: ReviewDashboardStats | null = null;
   let loading = true;
 
   function formatShootTime(start?: string, end?: string): string {
@@ -30,7 +37,12 @@
 
   onMount(async () => {
     try {
-      data = await dashboardApi.stats();
+      const [stats, rStats] = await Promise.all([
+        dashboardApi.stats(),
+        reviewsApi.getDashboardStats().catch(() => null),
+      ]);
+      data = stats;
+      reviewStats = rStats;
     } finally {
       loading = false;
     }
@@ -50,7 +62,7 @@
       <div class="text-gray-500">加载中...</div>
     </div>
   {:else if data}
-    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-6">
       <div class="card p-5">
         <div class="flex items-center">
           <div class="p-2 bg-blue-100 rounded-lg">
@@ -118,6 +130,58 @@
         </div>
       </div>
     </div>
+
+    {#if reviewStats}
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-yellow-100 rounded-lg">
+              <Star class="w-6 h-6 text-yellow-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">近30天平均评分</p>
+              <p class="text-2xl font-bold text-gray-900">
+                {reviewStats.avg_rating_30d.toFixed(1)}
+                <span class="text-sm font-normal text-gray-500">/5</span>
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-blue-100 rounded-lg">
+              <BarChart3 class="w-6 h-6 text-blue-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">近30天评价数</p>
+              <p class="text-2xl font-bold text-gray-900">{reviewStats.review_count_30d}</p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-orange-100 rounded-lg">
+              <MessageSquare class="w-6 h-6 text-orange-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">待回访订单</p>
+              <p class="text-2xl font-bold text-gray-900">{reviewStats.pending_follow_up.total_pending}</p>
+            </div>
+          </div>
+        </div>
+        <div class="card p-5">
+          <div class="flex items-center">
+            <div class="p-2 bg-red-100 rounded-lg">
+              <AlertCircle class="w-6 h-6 text-red-600" />
+            </div>
+            <div class="ml-4">
+              <p class="text-sm text-gray-500">低分评价（≤3星）</p>
+              <p class="text-2xl font-bold text-gray-900">{reviewStats.low_score_orders.length}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
       <div class="card lg:col-span-2">
@@ -187,6 +251,140 @@
         </div>
       </div>
     </div>
+
+    {#if reviewStats}
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        <div class="card lg:col-span-2">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between flex-wrap gap-3">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <TrendingUp class="w-5 h-5 mr-2 text-yellow-500" />
+              近30天客户满意度趋势
+            </h2>
+            <div class="flex items-center gap-4 text-sm text-gray-500">
+              <span>平均评分: <span class="font-semibold text-gray-900">{reviewStats.avg_rating_30d.toFixed(2)}</span></span>
+              <span>评价总数: <span class="font-semibold text-gray-900">{reviewStats.review_count_30d}</span></span>
+            </div>
+          </div>
+          <div class="p-6">
+            {#if reviewStats.satisfaction_trend.length === 0 || reviewStats.review_count_30d === 0}
+              <p class="text-gray-500 text-center py-8">暂无评价数据</p>
+            {:else}
+              <div class="space-y-3">
+                {#each reviewStats.satisfaction_trend.slice(-14) as item}
+                  <div class="flex items-center gap-3">
+                    <span class="text-xs text-gray-500 w-20 shrink-0">{formatDate(item.date, 'MM-DD')}</span>
+                    <div class="flex-1 h-5 bg-gray-100 rounded-full overflow-hidden relative">
+                      <div
+                        class="h-full bg-gradient-to-r from-yellow-400 to-yellow-500 rounded-full transition-all"
+                        style="width: {(item.avg_satisfaction / 5) * 100}%;"
+                      ></div>
+                    </div>
+                    <div class="w-28 text-right shrink-0">
+                      <span class="text-sm font-semibold text-gray-900">{item.avg_satisfaction.toFixed(1)}</span>
+                      {#if item.review_count > 0}
+                        <span class="text-xs text-gray-500 ml-1">({item.review_count}条)</span>
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <AlertCircle class="w-5 h-5 mr-2 text-red-500" />
+              低分订单预警
+            </h2>
+            <a href="/reviews/customer" class="text-sm text-primary-600 hover:text-primary-700">查看全部</a>
+          </div>
+          <div class="overflow-x-auto">
+            {#if reviewStats.low_score_orders.length === 0}
+              <p class="text-gray-500 text-center py-8">近30天暂无低分评价</p>
+            {:else}
+              <table class="w-full">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">订单</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">评分</th>
+                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">回访</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                  {#each reviewStats.low_score_orders.slice(0, 5) as lo}
+                    <tr class="hover:bg-gray-50">
+                      <td class="px-4 py-3">
+                        <a href="/orders/{lo.order_id}" class="text-sm font-medium text-primary-600 hover:text-primary-900">
+                          {lo.order_no}
+                        </a>
+                        <p class="text-xs text-gray-500 mt-0.5">{lo.customer_name || '匿名'}</p>
+                      </td>
+                      <td class="px-4 py-3">
+                        <div class="flex items-center gap-0.5">
+                          {#each Array(5) as _, i}
+                            <Star
+                              class={`w-4 h-4 ${i < lo.rating ? 'text-yellow-400 fill-yellow-400' : 'text-gray-300'}`}
+                            />
+                          {/each}
+                        </div>
+                      </td>
+                      <td class="px-4 py-3">
+                        {#if lo.follow_up_status}
+                          <span class="badge {getStatusBadge(followUpStatusMap, lo.follow_up_status).color}">
+                            {getStatusBadge(followUpStatusMap, lo.follow_up_status).label}
+                          </span>
+                        {:else}
+                          <span class="text-xs text-red-600">待处理</span>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {/if}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="p-6 border-b border-gray-200 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+              <MessageSquare class="w-5 h-5 mr-2 text-orange-500" />
+              待回访订单统计
+            </h2>
+            <a href="/reviews/follow-ups" class="text-sm text-primary-600 hover:text-primary-700">查看全部</a>
+          </div>
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <div class="text-center p-3 bg-yellow-50 rounded-lg">
+                <Clock3 class="w-6 h-6 text-yellow-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">{reviewStats.pending_follow_up.total_pending}</p>
+                <p class="text-xs text-gray-500">待回访</p>
+              </div>
+              <div class="text-center p-3 bg-blue-50 rounded-lg">
+                <MessageSquare class="w-6 h-6 text-blue-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">{reviewStats.pending_follow_up.in_progress}</p>
+                <p class="text-xs text-gray-500">回访中</p>
+              </div>
+              <div class="text-center p-3 bg-green-50 rounded-lg">
+                <CheckCircle2 class="w-6 h-6 text-green-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">{reviewStats.pending_follow_up.completed_last_7d}</p>
+                <p class="text-xs text-gray-500">近7天已完成</p>
+              </div>
+              <div class="text-center p-3 bg-red-50 rounded-lg">
+                <AlertTriangle class="w-6 h-6 text-red-600 mx-auto mb-1" />
+                <p class="text-2xl font-bold text-gray-900">{reviewStats.pending_follow_up.pending_overdue}</p>
+                <p class="text-xs text-gray-500">已超期待回访</p>
+              </div>
+            </div>
+            <div class="text-center text-sm text-gray-500">
+              7天内待回访: <span class="font-semibold text-gray-900">{reviewStats.pending_follow_up.pending_7d}</span> 单
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
 
     {#if data.stats.photographer_schedule_stats.length > 0}
       <div class="card mb-6">

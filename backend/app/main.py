@@ -14,6 +14,7 @@ from app.routers.selections import selections_router
 from app.routers.retouch import retouch_router
 from app.routers.delivery import delivery_router
 from app.routers.dashboard import dashboard_router
+from app.routers.reviews import reviews_router
 
 
 def create_tables() -> None:
@@ -46,6 +47,7 @@ app = Litestar(
         retouch_router,
         delivery_router,
         dashboard_router,
+        reviews_router,
     ],
     cors_config=cors_config,
     openapi_config=openapi_config,

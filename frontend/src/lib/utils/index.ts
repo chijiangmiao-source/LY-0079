@@ -61,6 +61,20 @@ export const userRoleMap: Record<string, { label: string; color: string }> = {
   customer: { label: '客户', color: 'bg-gray-100 text-gray-800' },
 };
 
+export const followUpStatusMap: Record<string, { label: string; color: string }> = {
+  pending: { label: '待回访', color: 'bg-yellow-100 text-yellow-800' },
+  in_progress: { label: '回访中', color: 'bg-blue-100 text-blue-800' },
+  completed: { label: '已完成', color: 'bg-green-100 text-green-800' },
+  cancelled: { label: '已取消', color: 'bg-gray-100 text-gray-800' },
+};
+
+export const afterSalesResultMap: Record<string, { label: string; color: string }> = {
+  resolved: { label: '已解决', color: 'bg-green-100 text-green-800' },
+  partially_resolved: { label: '部分解决', color: 'bg-yellow-100 text-yellow-800' },
+  unresolved: { label: '未解决', color: 'bg-red-100 text-red-800' },
+  no_issues: { label: '无问题', color: 'bg-gray-100 text-gray-800' },
+};
+
 export function getStatusBadge(statusMap: Record<string, { label: string; color: string }>, status: string) {
   const info = statusMap[status] || { label: status, color: 'bg-gray-100 text-gray-800' };
   return info;
